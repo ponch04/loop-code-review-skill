@@ -70,7 +70,8 @@ and judged against `expected_output`. There is no CI.
   checked in `blockers()`; understanding and test evidence are agent-recorded verdicts
   (`--understood`, `--test-evidence`) because the script cannot judge them itself.
 - **Fingerprint identity.** A pass, a validation run and an acceptance are all bound to the
-  hash of the scoped diff-vs-HEAD plus untracked contents. Validation from a different
+  hash of the scoped diff against HEAD (or the empty tree on an unborn branch) plus untracked
+  contents. Validation from a different
   fingerprint is not evidence; a review of an unchanged fingerprint is not a new pass.
   Within one fingerprint the **latest run of each command wins**, so re-running clears an
   environmental or flaky failure; distinct commands are never conflated. Evidence may not
