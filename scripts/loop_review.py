@@ -10,6 +10,8 @@ Commands:
   validate -- <command...>                 run a validation command, record result
   pass-start                               open a full-review pass (checks gates)
   pass-record --score S --findings N [--understood] [--test-score T] [--note TEXT]
+  amend [--understood] [--score S] [--findings N] [--test-score T] [--note TEXT]
+                                           add missing reviewer output to the last pass
   resolve [--fixed N] [--withdrawn N] [--adjudicated-invalid N]
   accept                                   exit 0 if accepted, else 1 + reasons
   status [--json]
@@ -216,8 +218,10 @@ def cmd_pass_record(a):
     os.chdir(repo_root())
     state = load()
     lp = last_pass(state)
-    if lp is None or lp.get("result") is not None:
+    if lp is None:
         die("no open pass to record")
+    if lp.get("result") is not None:
+        die(f"pass {lp['n']} is already recorded; use `amend` to add output the reviewer supplied afterwards")
     lp["result"] = {
         "score": a.score,
         "findings": a.findings,
@@ -231,6 +235,43 @@ def cmd_pass_record(a):
     print(f"pass {lp['n']} recorded: score {a.score}, {a.findings} finding(s), understood={bool(a.understood)}")
     if a.findings == 0 and a.score < 9.5:
         print("note: score below 9.5 with zero findings — treat the number as calibration noise; findings control the loop")
+
+
+def cmd_amend(a):
+    """Add output the reviewer supplied on request, without opening a new pass.
+
+    SKILL.md step 4: when a reviewer omits required output (understanding summary, score)
+    or turns a vague concern into concrete findings, the agent asks the *same* reviewer in
+    the same conversation. That is not a new pass, and the unchanged fingerprint rightly
+    blocks `pass-start` — so the recorded pass must be completable in place.
+
+    Amendment may only add information. `--findings` can rise (the reviewer named issues
+    it had only hinted at) but never fall: retiring a finding is `resolve`, which demands
+    a fix, a withdrawal or an adjudication.
+    """
+    os.chdir(repo_root())
+    state = load()
+    lp = last_pass(state)
+    if lp is None or lp.get("result") is None:
+        die("no recorded pass to amend")
+    r = lp["result"]
+    given = {k: v for k, v in (("score", a.score), ("findings", a.findings),
+                               ("test_score", a.test_score), ("note", a.note)) if v is not None}
+    if a.understood:
+        given["understood"] = True
+    if not given:
+        die("amend needs at least one of --understood / --score / --findings / --test-score / --note")
+    if "findings" in given and given["findings"] < r["findings"]:
+        die(f"amend cannot lower findings ({r['findings']} -> {given['findings']}); "
+            "record a fix, withdrawal or adjudication with `resolve` instead")
+    r.update(given)
+    r.setdefault("amendments", []).append({**given, "at": now()})
+    state["fingerprint_current"] = fingerprint(state["scope"])
+    save(state)
+    print(f"pass {lp['n']} amended: " + ", ".join(f"{k}={v}" for k, v in given.items()))
+    print(f"pass {lp['n']}: score {r['score']}, {r['resolved']}/{r['findings']} resolved, understood={r['understood']}")
+    if state["fingerprint_current"] != lp["fingerprint"]:
+        print("note: scoped changes moved since this pass — the review is stale; validate and open a new pass")
 
 
 def cmd_resolve(a):
@@ -310,6 +351,7 @@ def main():
     s = sub.add_parser("validate"); s.add_argument("command", nargs="*"); s.set_defaults(fn=cmd_validate)
     s = sub.add_parser("pass-start"); s.add_argument("--force", action="store_true"); s.set_defaults(fn=cmd_pass_start)
     s = sub.add_parser("pass-record"); s.add_argument("--score", type=float, required=True); s.add_argument("--findings", type=int, required=True); s.add_argument("--understood", action="store_true"); s.add_argument("--test-score", type=float); s.add_argument("--note"); s.set_defaults(fn=cmd_pass_record)
+    s = sub.add_parser("amend"); s.add_argument("--understood", action="store_true"); s.add_argument("--score", type=float); s.add_argument("--findings", type=int); s.add_argument("--test-score", type=float); s.add_argument("--note"); s.set_defaults(fn=cmd_amend)
     s = sub.add_parser("resolve"); s.add_argument("--fixed", type=int, default=0); s.add_argument("--withdrawn", type=int, default=0); s.add_argument("--adjudicated-invalid", type=int, default=0); s.set_defaults(fn=cmd_resolve)
     s = sub.add_parser("accept"); s.set_defaults(fn=cmd_accept)
     s = sub.add_parser("status"); s.add_argument("--json", action="store_true"); s.set_defaults(fn=cmd_status)
