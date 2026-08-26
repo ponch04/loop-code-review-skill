@@ -95,7 +95,10 @@ def load():
     if not os.path.exists(STATE_FILE):
         die("no active loop; run `init` first")
     with open(STATE_FILE) as f:
-        return json.load(f)
+        try:
+            return json.load(f)
+        except ValueError as e:
+            die(f"{STATE_FILE} is not valid JSON ({e}); run `reset` and start the loop again")
 
 
 def save(state):
@@ -238,7 +241,9 @@ def cmd_init(a):
     if not a.paths:
         die("init needs at least one task-owned path after `--`")
     root = repo_root()
-    scope = [to_repo_relative(p, root) for p in a.paths]
+    # Deduplicate: `f.py ./f.py f.py` is one path. git would collapse it anyway, but the
+    # list is echoed into the reviewer prompt and must read as the agent meant it.
+    scope = list(dict.fromkeys(to_repo_relative(p, root) for p in a.paths))
     os.chdir(root)
     if os.path.exists(STATE_FILE) and not a.force:
         die("loop already active; use `reset` or `--force`")
@@ -375,6 +380,10 @@ def cmd_pass_record(a):
         die("no open pass to record")
     if lp.get("result") is not None:
         die(f"pass {lp['n']} is already recorded; use `amend` to add output the reviewer supplied afterwards")
+    if a.findings < 0:
+        # `unresolved = findings - resolved` feeds blockers(); a negative count would read
+        # as "already resolved" and pass exit condition 2 without a single fix.
+        die(f"--findings must not be negative ({a.findings}); it counts findings the reviewer reported")
     lp["result"] = {
         "score": a.score,
         "findings": a.findings,
@@ -416,6 +425,8 @@ def cmd_amend(a):
         given["understood"] = True
     if not given:
         die("amend needs at least one of --understood / --test-evidence / --score / --findings / --test-score / --note")
+    if "findings" in given and given["findings"] < 0:
+        die(f"--findings must not be negative ({given['findings']})")
     if "findings" in given and given["findings"] < r["findings"]:
         die(f"amend cannot lower findings ({r['findings']} -> {given['findings']}); "
             "record a fix, withdrawal or adjudication with `resolve` instead")
@@ -488,7 +499,7 @@ def cmd_status(a):
     for p in state["passes"]:
         r = p.get("result")
         if r:
-            print(f"  #{p['n']}  score {r['score']}  findings {r['resolved']}/{r['findings']} resolved  understood={r['understood']}  test-evidence={r.get('test_evidence')}  test-score={r['test_score']}")
+            print(f"  #{p['n']}  score {r['score']}  findings {r['resolved']}/{r['findings']} resolved  understood={r['understood']}  test-evidence={r.get('test_evidence')}  test-score={r.get('test_score')}")
         else:
             print(f"  #{p['n']}  (open)")
     print_validation(current_validation(state))
