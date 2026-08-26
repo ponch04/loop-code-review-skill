@@ -43,7 +43,7 @@ python3 scripts/loop_review.py --help          # smoke: argument surface parses
 python3 scripts/loop_review.py init -- README.md
 python3 scripts/loop_review.py validate -- true
 python3 scripts/loop_review.py pass-start
-python3 scripts/loop_review.py pass-record --score 9.5 --findings 0 --understood
+python3 scripts/loop_review.py pass-record --score 9.5 --findings 0 --understood --test-evidence trusted
 python3 scripts/loop_review.py accept          # expect exit 0
 python3 scripts/loop_review.py reset && rmdir .loop-review
 ```
@@ -60,11 +60,15 @@ and judged against `expected_output`. There is no CI.
   no edits — in the script or in the workflow, unless the user explicitly asks.
 - **The script never spawns or talks to a model.** Reviewer output is transcribed into it by
   the orchestrating agent. Keeping the loop runtime-agnostic is why it is portable.
-- **The score never gates acceptance.** 1–10 is a progress signal. It must never appear in
-  `blockers()`, and no finding may be created or kept to justify a number. Findings win.
+- **The score never gates acceptance.** 1–10 is a progress signal — this covers `--score`
+  and `--test-score` alike. Neither may appear in `blockers()`, and no finding may be created
+  or kept to justify a number. Findings win. Test evidence gates through the categorical
+  `--test-evidence` verdict, never through the test score.
 - **Acceptance = the four conditions in SKILL.md** (green validation on the current state,
   zero unresolved findings, credible understanding, trustworthy or justified test evidence).
-  Do not add a fifth condition, and do not let any of them become advisory.
+  Do not add a fifth condition, and do not let any of them become advisory. All four are
+  checked in `blockers()`; understanding and test evidence are agent-recorded verdicts
+  (`--understood`, `--test-evidence`) because the script cannot judge them itself.
 - **Fingerprint identity.** A pass, a validation run and an acceptance are all bound to the
   hash of the scoped diff-vs-HEAD plus untracked contents. Validation from a different
   fingerprint is not evidence; a review of an unchanged fingerprint is not a new pass.

@@ -45,8 +45,11 @@ Then spawn a reviewer with the platform's fresh-context mechanism (Claude Code: 
 **3. Record the result** exactly as the reviewer returned it:
 
 ```bash
-python scripts/loop_review.py pass-record --score 8.5 --findings 3 --understood [--test-score 7]
+python scripts/loop_review.py pass-record --score 8.5 --findings 3 --understood \
+    --test-evidence trusted|justified-absent|inadequate [--test-score 7]
 ```
+
+`--test-evidence` is the reviewer's verdict on exit condition 4, not your own: `trusted` = the tests exercise the changed behaviour, `justified-absent` = the reviewer accepted a concrete reason for having none, `inadequate` = neither, which blocks acceptance until a later pass or an `amend` changes it.
 
 **4. Triage findings** as review comments, not orders. Fix all concrete actionable ones as one coherent batch. Reject a finding only with repository/validation evidence, and ask the *same* reviewer to reconsider; if the disagreement stays material, spawn one fresh adjudicator for that single finding (read-only, evidence-based verdict). A finding stays unresolved until fixed, withdrawn, or adjudicated invalid:
 

@@ -9,8 +9,9 @@ Commands:
   init [--max-passes N] -- <paths...>      start a loop over task-owned paths
   validate -- <command...>                 run a validation command, record result
   pass-start                               open a full-review pass (checks gates)
-  pass-record --score S --findings N [--understood] [--test-score T] [--note TEXT]
-  amend [--understood] [--score S] [--findings N] [--test-score T] [--note TEXT]
+  pass-record --score S --findings N --test-evidence {trusted|justified-absent|inadequate}
+              [--understood] [--test-score T] [--note TEXT]
+  amend [--understood] [--test-evidence V] [--score S] [--findings N] [--test-score T] [--note TEXT]
                                            add missing reviewer output to the last pass
   resolve [--fixed N] [--withdrawn N] [--adjudicated-invalid N]
   accept                                   exit 0 if accepted, else 1 + reasons
@@ -26,6 +27,12 @@ import shlex
 import subprocess
 import sys
 import time
+
+# Exit condition 4 in SKILL.md, made mechanical. The script cannot judge whether test
+# evidence is trustworthy; it can only require the agent to record the reviewer's verdict
+# and refuse to accept on the one value that means "no adequate evidence, no justification".
+TEST_EVIDENCE = ("trusted", "justified-absent", "inadequate")
+TEST_EVIDENCE_BLOCKING = "inadequate"
 
 STATE_DIR = ".loop-review"
 STATE_FILE = os.path.join(STATE_DIR, "state.json")
@@ -144,6 +151,11 @@ def blockers(state):
         reasons.append(f"{unresolved} unresolved actionable finding(s) from pass {lp['n']}")
     if not lp["result"]["understood"]:
         reasons.append("reviewer did not demonstrate a credible understanding of the change")
+    evidence = lp["result"].get("test_evidence")
+    if evidence is None:
+        reasons.append(f"test evidence not assessed for pass {lp['n']} (record it with `amend --test-evidence ...`)")
+    elif evidence == TEST_EVIDENCE_BLOCKING:
+        reasons.append("test evidence for the changed behaviour is inadequate and its absence is not justified")
     return reasons
 
 
@@ -227,12 +239,13 @@ def cmd_pass_record(a):
         "findings": a.findings,
         "resolved": 0,
         "understood": bool(a.understood),
+        "test_evidence": a.test_evidence,
         "test_score": a.test_score,
         "note": a.note,
         "recorded": now(),
     }
     save(state)
-    print(f"pass {lp['n']} recorded: score {a.score}, {a.findings} finding(s), understood={bool(a.understood)}")
+    print(f"pass {lp['n']} recorded: score {a.score}, {a.findings} finding(s), understood={bool(a.understood)}, test evidence {a.test_evidence}")
     if a.findings == 0 and a.score < 9.5:
         print("note: score below 9.5 with zero findings — treat the number as calibration noise; findings control the loop")
 
@@ -256,11 +269,12 @@ def cmd_amend(a):
         die("no recorded pass to amend")
     r = lp["result"]
     given = {k: v for k, v in (("score", a.score), ("findings", a.findings),
+                               ("test_evidence", a.test_evidence),
                                ("test_score", a.test_score), ("note", a.note)) if v is not None}
     if a.understood:
         given["understood"] = True
     if not given:
-        die("amend needs at least one of --understood / --score / --findings / --test-score / --note")
+        die("amend needs at least one of --understood / --test-evidence / --score / --findings / --test-score / --note")
     if "findings" in given and given["findings"] < r["findings"]:
         die(f"amend cannot lower findings ({r['findings']} -> {given['findings']}); "
             "record a fix, withdrawal or adjudication with `resolve` instead")
@@ -269,7 +283,7 @@ def cmd_amend(a):
     state["fingerprint_current"] = fingerprint(state["scope"])
     save(state)
     print(f"pass {lp['n']} amended: " + ", ".join(f"{k}={v}" for k, v in given.items()))
-    print(f"pass {lp['n']}: score {r['score']}, {r['resolved']}/{r['findings']} resolved, understood={r['understood']}")
+    print(f"pass {lp['n']}: score {r['score']}, {r['resolved']}/{r['findings']} resolved, understood={r['understood']}, test evidence {r.get('test_evidence')}")
     if state["fingerprint_current"] != lp["fingerprint"]:
         print("note: scoped changes moved since this pass — the review is stale; validate and open a new pass")
 
@@ -321,7 +335,7 @@ def cmd_status(a):
     for p in state["passes"]:
         r = p.get("result")
         if r:
-            print(f"  #{p['n']}  score {r['score']}  findings {r['resolved']}/{r['findings']} resolved  understood={r['understood']}  test={r['test_score']}")
+            print(f"  #{p['n']}  score {r['score']}  findings {r['resolved']}/{r['findings']} resolved  understood={r['understood']}  test-evidence={r.get('test_evidence')}  test-score={r['test_score']}")
         else:
             print(f"  #{p['n']}  (open)")
     cur = current_validation(state)
@@ -350,8 +364,8 @@ def main():
     s = sub.add_parser("init"); s.add_argument("--max-passes", type=int, default=5); s.add_argument("--force", action="store_true"); s.add_argument("paths", nargs="*"); s.set_defaults(fn=cmd_init)
     s = sub.add_parser("validate"); s.add_argument("command", nargs="*"); s.set_defaults(fn=cmd_validate)
     s = sub.add_parser("pass-start"); s.add_argument("--force", action="store_true"); s.set_defaults(fn=cmd_pass_start)
-    s = sub.add_parser("pass-record"); s.add_argument("--score", type=float, required=True); s.add_argument("--findings", type=int, required=True); s.add_argument("--understood", action="store_true"); s.add_argument("--test-score", type=float); s.add_argument("--note"); s.set_defaults(fn=cmd_pass_record)
-    s = sub.add_parser("amend"); s.add_argument("--understood", action="store_true"); s.add_argument("--score", type=float); s.add_argument("--findings", type=int); s.add_argument("--test-score", type=float); s.add_argument("--note"); s.set_defaults(fn=cmd_amend)
+    s = sub.add_parser("pass-record"); s.add_argument("--score", type=float, required=True); s.add_argument("--findings", type=int, required=True); s.add_argument("--test-evidence", choices=TEST_EVIDENCE, required=True); s.add_argument("--understood", action="store_true"); s.add_argument("--test-score", type=float); s.add_argument("--note"); s.set_defaults(fn=cmd_pass_record)
+    s = sub.add_parser("amend"); s.add_argument("--understood", action="store_true"); s.add_argument("--test-evidence", choices=TEST_EVIDENCE); s.add_argument("--score", type=float); s.add_argument("--findings", type=int); s.add_argument("--test-score", type=float); s.add_argument("--note"); s.set_defaults(fn=cmd_amend)
     s = sub.add_parser("resolve"); s.add_argument("--fixed", type=int, default=0); s.add_argument("--withdrawn", type=int, default=0); s.add_argument("--adjudicated-invalid", type=int, default=0); s.set_defaults(fn=cmd_resolve)
     s = sub.add_parser("accept"); s.set_defaults(fn=cmd_accept)
     s = sub.add_parser("status"); s.add_argument("--json", action="store_true"); s.set_defaults(fn=cmd_status)
