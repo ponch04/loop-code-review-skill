@@ -87,7 +87,9 @@ and judged against `expected_output`. There is no CI.
   so a human can override; it must remain opt-in and never be used by the agent on its own
   initiative. `validate-drop` without `--force` retracts only records whose exit status means
   the command never ran (126/127); retracting a real failure is a gate bypass, and retracted
-  records stay in `state.json` with a reason rather than being deleted.
+  records stay in `state.json` with a reason rather than being deleted. Retiring a check the
+  last pass rested on always needs `--force`, and is stamped on the current fingerprint —
+  recorded history is never rewritten.
 
 ## Not a problem — do not file these
 
