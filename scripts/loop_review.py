@@ -83,6 +83,21 @@ def last_pass(state):
     return state["passes"][-1] if state["passes"] else None
 
 
+def current_validation(state):
+    """Validation runs for the current fingerprint, latest result per command.
+
+    Re-running the same command on unchanged files supersedes its earlier result, so a
+    flaky or environment failure can be cleared by re-running it — not only by editing.
+    Distinct commands are tracked separately: a green re-run of the tests does not
+    absolve a red lint.
+    """
+    latest = {}
+    for v in state["validation"]:
+        if v["fingerprint"] == state["fingerprint_current"]:
+            latest[v["cmd"]] = v
+    return list(latest.values())
+
+
 def blockers(state):
     """Return list of reasons acceptance is not possible. Empty list == accepted."""
     reasons = []
@@ -95,15 +110,12 @@ def blockers(state):
         return reasons
     if state["fingerprint_current"] != lp["fingerprint"]:
         reasons.append("scoped changes moved since the last pass; review is stale")
-    if not state["validation"]:
-        reasons.append("no validation recorded")
-    else:
-        red = [v for v in state["validation"] if v["fingerprint"] == state["fingerprint_current"] and v["exit"] != 0]
-        current = [v for v in state["validation"] if v["fingerprint"] == state["fingerprint_current"]]
-        if not current:
-            reasons.append("no validation run against the current state")
-        elif red:
-            reasons.append(f"validation red: {red[-1]['cmd']}")
+    cur = current_validation(state)
+    red = [v for v in cur if v["exit"] != 0]
+    if not cur:
+        reasons.append("no validation run against the current state")
+    elif red:
+        reasons.append(f"validation red: {red[-1]['cmd']}")
     unresolved = lp["result"]["findings"] - lp["result"]["resolved"]
     if unresolved > 0:
         reasons.append(f"{unresolved} unresolved actionable finding(s) from pass {lp['n']}")
@@ -159,11 +171,11 @@ def cmd_pass_start(a):
         die(f"pass limit {state['max_passes']} reached — outcome is INCOMPLETE unless the user asked for persistence (then use --force)")
     if lp and lp["fingerprint"] == state["fingerprint_current"] and not a.force:
         die("scoped changes are unchanged since the last pass; clarify with the same reviewer instead of opening a new full review (--force to override)")
-    cur = [v for v in state["validation"] if v["fingerprint"] == state["fingerprint_current"]]
+    cur = current_validation(state)
     if not cur:
         die("no validation recorded for the current state; run `validate` first")
     if any(v["exit"] != 0 for v in cur):
-        die("validation is red for the current state; fix it before requesting a review")
+        die("validation is red for the current state; fix it (or re-run the command if the failure was environmental) before requesting a review")
     state["passes"].append({"n": n, "opened": now(), "fingerprint": state["fingerprint_current"], "result": None})
     save(state)
     print(f"pass {n}/{state['max_passes']} opened on fingerprint {state['fingerprint_current']}")
@@ -246,8 +258,8 @@ def cmd_status(a):
             print(f"  #{p['n']}  score {r['score']}  findings {r['resolved']}/{r['findings']} resolved  understood={r['understood']}  test={r['test_score']}")
         else:
             print(f"  #{p['n']}  (open)")
-    cur = [v for v in state["validation"] if v["fingerprint"] == state["fingerprint_current"]]
-    print(f"validation on current state: {len(cur)} run(s), " + ("GREEN" if cur and all(v['exit'] == 0 for v in cur) else "RED/none"))
+    cur = current_validation(state)
+    print(f"validation on current state: {len(cur)} command(s), " + ("GREEN" if cur and all(v['exit'] == 0 for v in cur) else "RED/none"))
     print("blockers: " + ("none — ready to accept" if not state["blockers"] else "; ".join(state["blockers"])))
 
 
