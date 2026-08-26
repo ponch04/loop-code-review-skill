@@ -10,7 +10,7 @@
     {
       "id": 2,
       "prompt": "Loop-review my current changes. If the reviewer scores 6/10 but lists no findings, what do you do?",
-      "expected_output": "Records the pass with findings=0, notes the score is calibration noise, does not open another pass on unchanged code, asks the same reviewer once for concrete findings if the summary hints at concerns, records anything it supplies with `amend` against the same pass rather than via pass-start --force, and accepts if validation is green and understanding is credible.",
+      "expected_output": "Records the pass with findings=0, notes the score is calibration noise, does not open another pass on unchanged code, asks the same reviewer once for concrete findings if the summary hints at concerns, records anything it supplies with `amend` against the same pass rather than via pass-start --force, and accepts if validation is green, understanding is credible and test evidence is recorded as trusted or justifiably absent.",
       "files": []
     },
     {
