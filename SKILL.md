@@ -25,13 +25,13 @@ The numeric score (1–10) is a **progress signal only**. It never triggers work
 **0. Scope.** Decide which files/hunks belong to *this task* from the task history and your own edits — not from `git status` alone. If ownership is ambiguous, ask the user. Never stage, commit, stash, reset or push unless asked.
 
 ```bash
-python scripts/loop_review.py init --max-passes 5 -- <task-owned paths...>
+python3 scripts/loop_review.py init --max-passes 5 -- <task-owned paths...>
 ```
 
 **1. Validate** the current state with the smallest meaningful checks for the touched surface (focused tests, typecheck, lint, build). Fix red validation before asking for a review.
 
 ```bash
-python scripts/loop_review.py validate -- <command>      # repeat per command
+python3 scripts/loop_review.py validate -- <command>      # repeat per command
 ```
 
 A command that never ran (typo, missing tool) is still recorded and will block `pass-start`; retract that record with `validate-drop -- <command>`. A command that ran and failed is a result — fix it or re-run it.
@@ -39,7 +39,7 @@ A command that never ran (typo, missing tool) is still recorded and will block `
 **2. Open a review pass.** The script refuses if the pass limit is reached, if validation is red, if a check the previous pass relied on has not been re-run on the current state, or if the scoped diff is unchanged since the last pass (a second opinion on identical code is not a new pass — clarify with the same reviewer instead).
 
 ```bash
-python scripts/loop_review.py pass-start
+python3 scripts/loop_review.py pass-start
 ```
 
 Then spawn a reviewer with the platform's fresh-context mechanism (Claude Code: `Task`/sub-agent; Codex: a new agent — never a mode that inherits history). Give it **only** the prompt from `references/reviewer-prompt.md` filled with repo path, scope from `status`, and validation commands. Do not pass your rationale, suspected issues, or earlier reviewer output.
@@ -47,7 +47,7 @@ Then spawn a reviewer with the platform's fresh-context mechanism (Claude Code: 
 **3. Record the result** exactly as the reviewer returned it:
 
 ```bash
-python scripts/loop_review.py pass-record --score 8.5 --findings 3 --understood \
+python3 scripts/loop_review.py pass-record --score 8.5 --findings 3 --understood \
     --test-evidence trusted|justified-absent|inadequate [--test-score 7]
 ```
 
@@ -56,13 +56,13 @@ python scripts/loop_review.py pass-record --score 8.5 --findings 3 --understood 
 **4. Triage findings** as review comments, not orders. Fix all concrete actionable ones as one coherent batch. Reject a finding only with repository/validation evidence, and ask the *same* reviewer to reconsider; if the disagreement stays material, spawn one fresh adjudicator for that single finding (read-only, evidence-based verdict). A finding stays unresolved until fixed, withdrawn, or adjudicated invalid:
 
 ```bash
-python scripts/loop_review.py resolve --fixed 2 --withdrawn 1
+python3 scripts/loop_review.py resolve --fixed 2 --withdrawn 1
 ```
 
 If the reviewer omitted required output or hinted at concerns without concrete findings, ask it once for the missing part in the same conversation. Don't spawn a new full pass for that — record what it supplies against the same pass:
 
 ```bash
-python scripts/loop_review.py amend --understood [--score 9.5] [--findings 2]
+python3 scripts/loop_review.py amend --understood [--score 9.5] [--findings 2]
 ```
 
 **5. Repeat** from step 1 after any fix batch touched scoped files — re-run the whole set of checks the last pass rested on, not just the quick one; a later pass may not be granted on weaker evidence than the pass before it. Stop looping for marginal polish — if what remains is preference, not risk, it isn't a finding.
@@ -70,8 +70,8 @@ python scripts/loop_review.py amend --understood [--score 9.5] [--findings 2]
 **6. Finish.**
 
 ```bash
-python scripts/loop_review.py accept     # exit 0 = accepted, exit 1 = prints what's blocking
-python scripts/loop_review.py status --json
+python3 scripts/loop_review.py accept     # exit 0 = accepted, exit 1 = prints what's blocking
+python3 scripts/loop_review.py status --json
 ```
 
 Reaching the pass limit without acceptance is an **incomplete outcome**; report the exact blocker, don't lower the bar. Continue past the limit only if the user explicitly asked for persistence until acceptance.
