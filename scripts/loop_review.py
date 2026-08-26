@@ -42,6 +42,22 @@ def repo_root():
     return git("rev-parse", "--show-toplevel").strip()
 
 
+def to_repo_relative(path, root):
+    """Interpret a scope path against the caller's cwd, store it relative to the repo root.
+
+    `init` may be run from a subdirectory, but every later command chdirs to the root, so
+    a path kept as typed would resolve against the wrong directory and silently scope the
+    loop to nothing.
+    """
+    rel = os.path.relpath(os.path.abspath(path), root)
+    if rel.split(os.sep)[0] == os.pardir:
+        # cwd or root may be reached through a symlink; compare resolved paths too.
+        rel = os.path.relpath(os.path.realpath(path), os.path.realpath(root))
+    if rel.split(os.sep)[0] == os.pardir:
+        die(f"path is outside the repository: {path}")
+    return rel.replace(os.sep, "/")
+
+
 def die(msg, code=1):
     print(f"loop-review: {msg}", file=sys.stderr)
     sys.exit(code)
@@ -134,19 +150,23 @@ def blockers(state):
 def cmd_init(a):
     if not a.paths:
         die("init needs at least one task-owned path after `--`")
-    os.chdir(repo_root())
+    root = repo_root()
+    scope = [to_repo_relative(p, root) for p in a.paths]
+    os.chdir(root)
     if os.path.exists(STATE_FILE) and not a.force:
         die("loop already active; use `reset` or `--force`")
     state = {
         "created": now(),
-        "scope": a.paths,
+        "scope": scope,
         "max_passes": a.max_passes,
         "passes": [],
         "validation": [],
-        "fingerprint_current": fingerprint(a.paths),
+        "fingerprint_current": fingerprint(scope),
     }
     save(state)
-    print(f"loop initialised: {len(a.paths)} path(s), max {a.max_passes} passes, fingerprint {state['fingerprint_current']}")
+    print(f"loop initialised: {len(scope)} path(s), max {a.max_passes} passes, fingerprint {state['fingerprint_current']}")
+    for p in scope:
+        print(f"  - {p}")
 
 
 def cmd_validate(a):
