@@ -46,6 +46,39 @@ STATE_FILE = os.path.join(STATE_DIR, "state.json")
 
 # ---------- helpers ----------
 
+def positive_int(v):
+    """argparse type: a count that must be at least 1."""
+    try:
+        n = int(v)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{v!r} is not an integer")
+    if n < 1:
+        raise argparse.ArgumentTypeError(f"must be at least 1, got {n}")
+    return n
+
+
+def nonneg_int(v):
+    """argparse type: a count of things that happened, so never negative."""
+    try:
+        n = int(v)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{v!r} is not an integer")
+    if n < 0:
+        raise argparse.ArgumentTypeError(f"must not be negative, got {n}")
+    return n
+
+
+def score_value(v):
+    """argparse type: the 1–10 progress signal. Range only — the score gates nothing."""
+    try:
+        f = float(v)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{v!r} is not a number")
+    if not 1.0 <= f <= 10.0:
+        raise argparse.ArgumentTypeError(f"must be within the 1–10 anchors, got {f}")
+    return f
+
+
 def git(*args, check=True):
     """Run git and return raw stdout **bytes**.
 
@@ -380,10 +413,6 @@ def cmd_pass_record(a):
         die("no open pass to record")
     if lp.get("result") is not None:
         die(f"pass {lp['n']} is already recorded; use `amend` to add output the reviewer supplied afterwards")
-    if a.findings < 0:
-        # `unresolved = findings - resolved` feeds blockers(); a negative count would read
-        # as "already resolved" and pass exit condition 2 without a single fix.
-        die(f"--findings must not be negative ({a.findings}); it counts findings the reviewer reported")
     lp["result"] = {
         "score": a.score,
         "findings": a.findings,
@@ -425,8 +454,6 @@ def cmd_amend(a):
         given["understood"] = True
     if not given:
         die("amend needs at least one of --understood / --test-evidence / --score / --findings / --test-score / --note")
-    if "findings" in given and given["findings"] < 0:
-        die(f"--findings must not be negative ({given['findings']})")
     if "findings" in given and given["findings"] < r["findings"]:
         die(f"amend cannot lower findings ({r['findings']} -> {given['findings']}); "
             "record a fix, withdrawal or adjudication with `resolve` instead")
@@ -446,12 +473,8 @@ def cmd_resolve(a):
     lp = last_pass(state)
     if lp is None or lp.get("result") is None:
         die("no recorded pass to resolve against")
-    counts = (("--fixed", a.fixed), ("--withdrawn", a.withdrawn), ("--adjudicated-invalid", a.adjudicated_invalid))
-    # Each flag counts something that happened, so it cannot be negative, and a call that
-    # reports nothing is a no-op that would still land in the log as a resolution step.
-    for name, value in counts:
-        if value < 0:
-            die(f"{name} must not be negative ({value}); it counts resolutions that happened")
+    # Counts are non-negative by argument type; a call that reports nothing is still a
+    # no-op that would land in the log as a resolution step.
     total = a.fixed + a.withdrawn + a.adjudicated_invalid
     if total == 0:
         die("resolve needs at least one of --fixed / --withdrawn / --adjudicated-invalid")
@@ -531,13 +554,13 @@ def main():
     p = argparse.ArgumentParser(prog="loop_review.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    s = sub.add_parser("init"); s.add_argument("--max-passes", type=int, default=5); s.add_argument("--force", action="store_true"); s.add_argument("paths", nargs="*"); s.set_defaults(fn=cmd_init)
+    s = sub.add_parser("init"); s.add_argument("--max-passes", type=positive_int, default=5); s.add_argument("--force", action="store_true"); s.add_argument("paths", nargs="*"); s.set_defaults(fn=cmd_init)
     s = sub.add_parser("validate"); s.add_argument("command", nargs="*"); s.set_defaults(fn=cmd_validate)
     s = sub.add_parser("validate-drop"); s.add_argument("--force", action="store_true"); s.add_argument("--reason"); s.add_argument("command", nargs="*"); s.set_defaults(fn=cmd_validate_drop)
     s = sub.add_parser("pass-start"); s.add_argument("--force", action="store_true"); s.set_defaults(fn=cmd_pass_start)
-    s = sub.add_parser("pass-record"); s.add_argument("--score", type=float, required=True); s.add_argument("--findings", type=int, required=True); s.add_argument("--test-evidence", choices=TEST_EVIDENCE, required=True); s.add_argument("--understood", action="store_true"); s.add_argument("--test-score", type=float); s.add_argument("--note"); s.set_defaults(fn=cmd_pass_record)
-    s = sub.add_parser("amend"); s.add_argument("--understood", action="store_true"); s.add_argument("--test-evidence", choices=TEST_EVIDENCE); s.add_argument("--score", type=float); s.add_argument("--findings", type=int); s.add_argument("--test-score", type=float); s.add_argument("--note"); s.set_defaults(fn=cmd_amend)
-    s = sub.add_parser("resolve"); s.add_argument("--fixed", type=int, default=0); s.add_argument("--withdrawn", type=int, default=0); s.add_argument("--adjudicated-invalid", type=int, default=0); s.set_defaults(fn=cmd_resolve)
+    s = sub.add_parser("pass-record"); s.add_argument("--score", type=score_value, required=True); s.add_argument("--findings", type=nonneg_int, required=True); s.add_argument("--test-evidence", choices=TEST_EVIDENCE, required=True); s.add_argument("--understood", action="store_true"); s.add_argument("--test-score", type=score_value); s.add_argument("--note"); s.set_defaults(fn=cmd_pass_record)
+    s = sub.add_parser("amend"); s.add_argument("--understood", action="store_true"); s.add_argument("--test-evidence", choices=TEST_EVIDENCE); s.add_argument("--score", type=score_value); s.add_argument("--findings", type=nonneg_int); s.add_argument("--test-score", type=score_value); s.add_argument("--note"); s.set_defaults(fn=cmd_amend)
+    s = sub.add_parser("resolve"); s.add_argument("--fixed", type=nonneg_int, default=0); s.add_argument("--withdrawn", type=nonneg_int, default=0); s.add_argument("--adjudicated-invalid", type=nonneg_int, default=0); s.set_defaults(fn=cmd_resolve)
     s = sub.add_parser("accept"); s.set_defaults(fn=cmd_accept)
     s = sub.add_parser("status"); s.add_argument("--json", action="store_true"); s.set_defaults(fn=cmd_status)
     s = sub.add_parser("fingerprint"); s.set_defaults(fn=cmd_fingerprint)
