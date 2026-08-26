@@ -373,13 +373,25 @@ def cmd_resolve(a):
     lp = last_pass(state)
     if lp is None or lp.get("result") is None:
         die("no recorded pass to resolve against")
+    counts = (("--fixed", a.fixed), ("--withdrawn", a.withdrawn), ("--adjudicated-invalid", a.adjudicated_invalid))
+    # Each flag counts something that happened, so it cannot be negative, and a call that
+    # reports nothing is a no-op that would still land in the log as a resolution step.
+    for name, value in counts:
+        if value < 0:
+            die(f"{name} must not be negative ({value}); it counts resolutions that happened")
     total = a.fixed + a.withdrawn + a.adjudicated_invalid
+    if total == 0:
+        die("resolve needs at least one of --fixed / --withdrawn / --adjudicated-invalid")
     r = lp["result"]
-    r["resolved"] = min(r["findings"], r["resolved"] + total)
+    claimed = r["resolved"] + total
+    r["resolved"] = min(r["findings"], claimed)
     r.setdefault("resolution_log", []).append({"fixed": a.fixed, "withdrawn": a.withdrawn, "adjudicated_invalid": a.adjudicated_invalid, "at": now()})
     state["fingerprint_current"] = fingerprint(state["scope"])
     save(state)
     print(f"pass {lp['n']}: {r['resolved']}/{r['findings']} resolved")
+    if claimed > r["findings"]:
+        print(f"note: {claimed} resolutions claimed against {r['findings']} finding(s) — clamped; "
+              "if the reviewer named more findings than were recorded, `amend --findings` first")
     if state["fingerprint_current"] != lp["fingerprint"]:
         print("scoped changes moved: validate, then open a new pass with a fresh reviewer")
 
