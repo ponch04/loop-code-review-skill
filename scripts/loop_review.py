@@ -8,6 +8,7 @@ exit condition holds. No dependencies beyond git and Python 3.8+.
 Commands:
   init [--max-passes N] -- <paths...>      start a loop over task-owned paths
   validate -- <command...>                 run a validation command, record result
+  validate-drop [--force] -- <command...>  retract a record for a command that never ran
   pass-start                               open a full-review pass (checks gates)
   pass-record --score S --findings N --test-evidence {trusted|justified-absent|inadequate}
               [--understood] [--test-score T] [--note TEXT]
@@ -31,6 +32,10 @@ import time
 # Exit condition 4 in SKILL.md, made mechanical. The script cannot judge whether test
 # evidence is trustworthy; it can only require the agent to record the reviewer's verdict
 # and refuse to accept on the one value that means "no adequate evidence, no justification".
+# Shell exit codes meaning the command was never executed: not found / not executable.
+# Only these may be retracted — a command that ran and failed is a gate, not a mistake.
+NEVER_RAN = (126, 127)
+
 TEST_EVIDENCE = ("trusted", "justified-absent", "inadequate")
 TEST_EVIDENCE_BLOCKING = "inadequate"
 
@@ -152,7 +157,7 @@ def current_validation(state):
     """
     latest = {}
     for v in state["validation"]:
-        if v["fingerprint"] == state["fingerprint_current"]:
+        if v["fingerprint"] == state["fingerprint_current"] and not v.get("retracted"):
             latest[v["cmd"]] = v
     return list(latest.values())
 
@@ -212,12 +217,18 @@ def cmd_init(a):
         print(f"  - {p}")
 
 
+def join_cmd(parts):
+    """The state key for a validation command. `validate` and `validate-drop` must build
+    it identically, or a retraction would silently miss the record it names."""
+    return " ".join(parts) if len(parts) == 1 else shlex.join(parts)
+
+
 def cmd_validate(a):
     os.chdir(repo_root())
     state = load()
     if not a.command:
         die("validate needs a command after `--`")
-    cmd = " ".join(a.command) if len(a.command) == 1 else shlex.join(a.command)
+    cmd = join_cmd(a.command)
     print(f"$ {cmd}", flush=True)
     r = subprocess.run(cmd, shell=True)
     state["fingerprint_current"] = fingerprint(state["scope"])
@@ -225,6 +236,44 @@ def cmd_validate(a):
     save(state)
     print(f"loop-review: validation {'GREEN' if r.returncode == 0 else 'RED'} (exit {r.returncode})")
     sys.exit(r.returncode)
+
+
+def cmd_validate_drop(a):
+    """Retract a validation record for a command that never executed.
+
+    A mistyped command (`pytset`) is recorded under its own key, so re-running the correct
+    one cannot supersede it and its exit 127 blocks `pass-start` for as long as the
+    fingerprint holds. Retracting it is bookkeeping, not a bypass — which is why only
+    "never ran" statuses qualify. A command that ran and failed is the gate doing its job:
+    fix the code, or re-run it if the failure was environmental.
+    """
+    os.chdir(repo_root())
+    state = load()
+    if not a.command:
+        die("validate-drop needs a command after `--`")
+    cmd = join_cmd(a.command)
+    state["fingerprint_current"] = fingerprint(state["scope"])
+    hits = [v for v in state["validation"]
+            if v["cmd"] == cmd and v["fingerprint"] == state["fingerprint_current"] and not v.get("retracted")]
+    if not hits:
+        print(f"loop-review: no validation record for `{cmd}` at the current state", file=sys.stderr)
+        cur = current_validation(state)
+        if cur:
+            print("recorded commands:", file=sys.stderr)
+            for v in cur:
+                print(f"  - {v['cmd']}  -> exit {v['exit']}", file=sys.stderr)
+        sys.exit(1)
+    ran = [v for v in hits if v["exit"] not in NEVER_RAN]
+    if ran and not a.force:
+        die(f"`{cmd}` ran and returned exit {ran[-1]['exit']} — that is a result, not a mistake; "
+            "fix it or re-run the command (--force to retract anyway)")
+    for v in hits:
+        v["retracted"] = {"at": now(), "reason": a.reason or ("forced" if a.force else "never ran")}
+    save(state)
+    print(f"retracted {len(hits)} record(s) for `{cmd}`")
+    cur = current_validation(state)
+    print(f"validation on current state: {len(cur)} command(s), " +
+          ("GREEN" if cur and all(v["exit"] == 0 for v in cur) else "RED/none"))
 
 
 def cmd_pass_start(a):
@@ -243,7 +292,8 @@ def cmd_pass_start(a):
     if not cur:
         die("no validation recorded for the current state; run `validate` first")
     if any(v["exit"] != 0 for v in cur):
-        die("validation is red for the current state; fix it (or re-run the command if the failure was environmental) before requesting a review")
+        die("validation is red for the current state; fix it, or re-run the command if the failure was environmental "
+            "(if it never ran at all — typo, missing tool — retract it with `validate-drop`)")
     state["passes"].append({"n": n, "opened": now(), "fingerprint": state["fingerprint_current"], "result": None})
     save(state)
     print(f"pass {n}/{state['max_passes']} opened on fingerprint {state['fingerprint_current']}")
@@ -392,6 +442,7 @@ def main():
 
     s = sub.add_parser("init"); s.add_argument("--max-passes", type=int, default=5); s.add_argument("--force", action="store_true"); s.add_argument("paths", nargs="*"); s.set_defaults(fn=cmd_init)
     s = sub.add_parser("validate"); s.add_argument("command", nargs="*"); s.set_defaults(fn=cmd_validate)
+    s = sub.add_parser("validate-drop"); s.add_argument("--force", action="store_true"); s.add_argument("--reason"); s.add_argument("command", nargs="*"); s.set_defaults(fn=cmd_validate_drop)
     s = sub.add_parser("pass-start"); s.add_argument("--force", action="store_true"); s.set_defaults(fn=cmd_pass_start)
     s = sub.add_parser("pass-record"); s.add_argument("--score", type=float, required=True); s.add_argument("--findings", type=int, required=True); s.add_argument("--test-evidence", choices=TEST_EVIDENCE, required=True); s.add_argument("--understood", action="store_true"); s.add_argument("--test-score", type=float); s.add_argument("--note"); s.set_defaults(fn=cmd_pass_record)
     s = sub.add_parser("amend"); s.add_argument("--understood", action="store_true"); s.add_argument("--test-evidence", choices=TEST_EVIDENCE); s.add_argument("--score", type=float); s.add_argument("--findings", type=int); s.add_argument("--test-score", type=float); s.add_argument("--note"); s.set_defaults(fn=cmd_amend)

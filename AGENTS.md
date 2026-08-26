@@ -81,8 +81,11 @@ and judged against `expected_output`. There is no CI.
   Detail belongs in `references/`, which is read on demand. Growth there is a real cost.
 - **Scope is task-owned paths, decided from task history — never `git status` alone.** When
   ownership is ambiguous, the workflow asks the user. Unrelated worktree work is untouched.
-- **Escape hatches stay explicit.** `--force` on `pass-start`/`init` exists so a human can
-  override; it must remain opt-in and never be used by the agent on its own initiative.
+- **Escape hatches stay explicit.** `--force` on `pass-start`/`init`/`validate-drop` exists
+  so a human can override; it must remain opt-in and never be used by the agent on its own
+  initiative. `validate-drop` without `--force` retracts only records whose exit status means
+  the command never ran (126/127); retracting a real failure is a gate bypass, and retracted
+  records stay in `state.json` with a reason rather than being deleted.
 
 ## Not a problem — do not file these
 

@@ -34,6 +34,8 @@ python scripts/loop_review.py init --max-passes 5 -- <task-owned paths...>
 python scripts/loop_review.py validate -- <command>      # repeat per command
 ```
 
+A command that never ran (typo, missing tool) is still recorded and will block `pass-start`; retract that record with `validate-drop -- <command>`. A command that ran and failed is a result — fix it or re-run it.
+
 **2. Open a review pass.** The script refuses if the pass limit is reached, if validation is red, or if the scoped diff is unchanged since the last pass (a second opinion on identical code is not a new pass — clarify with the same reviewer instead).
 
 ```bash
