@@ -1,0 +1,29 @@
+{
+  "skill_name": "loop-code-review",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "I've finished the retry logic in src/http/client.ts and added tests in tests/client.test.ts. Keep reviewing and fixing it with an independent reviewer until it's clean. The worktree also has unrelated WIP in src/ui/ — leave that alone.",
+      "expected_output": "Initialises the loop scoped to client.ts + client.test.ts only, runs focused tests before the first pass, spawns a fresh sub-agent with the template prompt, records score/findings via the script, fixes findings as a batch, re-validates, repeats, and finishes with `accept` and the final report. Never touches src/ui/.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "Loop-review my current changes. If the reviewer scores 6/10 but lists no findings, what do you do?",
+      "expected_output": "Records the pass with findings=0, notes the score is calibration noise, does not open another pass on unchanged code, asks the same reviewer once for concrete findings if the summary hints at concerns, and accepts if validation is green and understanding is credible.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "Run /loop-code-review on the migration in db/migrations/0042_add_index.sql and the model change in app/models/order.py. It's ambiguous whether app/models/customer.py changes are mine or from the other branch I merged.",
+      "expected_output": "Asks the user about customer.py ownership before initialising scope rather than guessing or reviewing the whole worktree.",
+      "files": []
+    },
+    {
+      "id": 4,
+      "prompt": "Loop-review this until a reviewer signs off. After 5 passes there's still one finding you believe is wrong.",
+      "expected_output": "Rejects the finding with evidence to the same reviewer, escalates once to a fresh adjudicator, and if still unresolved reports an INCOMPLETE outcome with the exact blocker rather than forcing a sixth pass or lowering the bar.",
+      "files": []
+    }
+  ]
+}
