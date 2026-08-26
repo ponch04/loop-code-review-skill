@@ -41,14 +41,27 @@ STATE_FILE = os.path.join(STATE_DIR, "state.json")
 # ---------- helpers ----------
 
 def git(*args, check=True):
-    r = subprocess.run(["git", *args], capture_output=True, text=True)
+    """Run git and return raw stdout **bytes**.
+
+    Neither diffs nor path names are guaranteed to be UTF-8: a latin-1 source file or a
+    filename in another encoding makes `text=True` raise UnicodeDecodeError and kill the
+    whole loop. Decoding is therefore the caller's decision, and `fingerprint()` skips it
+    entirely — it hashes the bytes.
+    """
+    r = subprocess.run(["git", *args], capture_output=True)
     if check and r.returncode != 0:
-        die(f"git {' '.join(args)} failed: {r.stderr.strip()}")
+        die(f"git {' '.join(args)} failed: {r.stderr.decode('utf-8', 'replace').strip()}")
     return r.stdout
 
 
+def git_text(*args, **kw):
+    """git output as text, for paths and display. Undecodable bytes survive as surrogates
+    (os.fsdecode), so a path can still be handed back to open()/os.chdir() unchanged."""
+    return os.fsdecode(git(*args, **kw))
+
+
 def repo_root():
-    return git("rev-parse", "--show-toplevel").strip()
+    return git_text("rev-parse", "--show-toplevel").strip()
 
 
 def to_repo_relative(path, root):
@@ -88,14 +101,15 @@ def save(state):
 def fingerprint(paths):
     """Hash of tracked diff (staged+unstaged) plus untracked file contents, scoped to paths."""
     h = hashlib.sha256()
-    h.update(git("diff", "HEAD", "--", *paths, check=False).encode())
+    h.update(git("diff", "HEAD", "--", *paths, check=False))
     # -z: NUL-separated and unquoted, so paths with spaces, newlines or non-ASCII
     # characters survive intact. Splitting plain `ls-files` output would corrupt them
     # and silently drop those files from the hash.
     out = git("ls-files", "-z", "--others", "--exclude-standard", "--", *paths, check=False)
-    untracked = [p for p in out.split("\0") if p]
+    # Kept as bytes: a filename need not be decodable, and open() takes bytes paths.
+    untracked = [p for p in out.split(b"\0") if p]
     for p in sorted(untracked):
-        h.update(p.encode())
+        h.update(p)
         try:
             with open(p, "rb") as f:
                 h.update(f.read())
@@ -371,6 +385,11 @@ def main():
     s = sub.add_parser("status"); s.add_argument("--json", action="store_true"); s.set_defaults(fn=cmd_status)
     s = sub.add_parser("fingerprint"); s.set_defaults(fn=cmd_fingerprint)
     s = sub.add_parser("reset"); s.set_defaults(fn=cmd_reset)
+
+    # Paths and validation commands can carry undecodable bytes (surrogates from
+    # os.fsdecode / argv). Printing them must not be the thing that kills the loop.
+    for stream in (sys.stdout, sys.stderr):
+        stream.reconfigure(errors="backslashreplace")
 
     # allow "--" separated trailing args for init/validate
     argv = sys.argv[1:]
