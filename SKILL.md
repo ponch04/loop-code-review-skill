@@ -54,7 +54,11 @@ python scripts/loop_review.py pass-record --score 8.5 --findings 3 --understood 
 python scripts/loop_review.py resolve --fixed 2 --withdrawn 1
 ```
 
-If the reviewer omitted required output or hinted at concerns without concrete findings, ask it once for the missing part in the same conversation. Don't spawn a new full pass for that.
+If the reviewer omitted required output or hinted at concerns without concrete findings, ask it once for the missing part in the same conversation. Don't spawn a new full pass for that — record what it supplies against the same pass:
+
+```bash
+python scripts/loop_review.py amend --understood [--score 9.5] [--findings 2]
+```
 
 **5. Repeat** from step 1 after any fix batch touched scoped files. Stop looping for marginal polish — if what remains is preference, not risk, it isn't a finding.
 
