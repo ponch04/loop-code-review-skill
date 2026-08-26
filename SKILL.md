@@ -36,7 +36,7 @@ python scripts/loop_review.py validate -- <command>      # repeat per command
 
 A command that never ran (typo, missing tool) is still recorded and will block `pass-start`; retract that record with `validate-drop -- <command>`. A command that ran and failed is a result — fix it or re-run it.
 
-**2. Open a review pass.** The script refuses if the pass limit is reached, if validation is red, or if the scoped diff is unchanged since the last pass (a second opinion on identical code is not a new pass — clarify with the same reviewer instead).
+**2. Open a review pass.** The script refuses if the pass limit is reached, if validation is red, if a check the previous pass relied on has not been re-run on the current state, or if the scoped diff is unchanged since the last pass (a second opinion on identical code is not a new pass — clarify with the same reviewer instead).
 
 ```bash
 python scripts/loop_review.py pass-start
@@ -65,7 +65,7 @@ If the reviewer omitted required output or hinted at concerns without concrete f
 python scripts/loop_review.py amend --understood [--score 9.5] [--findings 2]
 ```
 
-**5. Repeat** from step 1 after any fix batch touched scoped files. Stop looping for marginal polish — if what remains is preference, not risk, it isn't a finding.
+**5. Repeat** from step 1 after any fix batch touched scoped files — re-run the whole set of checks the last pass rested on, not just the quick one; a later pass may not be granted on weaker evidence than the pass before it. Stop looping for marginal polish — if what remains is preference, not risk, it isn't a finding.
 
 **6. Finish.**
 

@@ -4,7 +4,7 @@
     {
       "id": 1,
       "prompt": "I've finished the retry logic in src/http/client.ts and added tests in tests/client.test.ts. Keep reviewing and fixing it with an independent reviewer until it's clean. The worktree also has unrelated WIP in src/ui/ — leave that alone.",
-      "expected_output": "Initialises the loop scoped to client.ts + client.test.ts only, runs focused tests before the first pass, spawns a fresh sub-agent with the template prompt, records score/findings via the script, fixes findings as a batch, re-validates, repeats, and finishes with `accept` and the final report. Never touches src/ui/.",
+      "expected_output": "Initialises the loop scoped to client.ts + client.test.ts only, runs focused tests before the first pass, spawns a fresh sub-agent with the template prompt, records score/findings via the script, fixes findings as a batch, re-validates with the full set of checks the previous pass rested on (not just the quick one), repeats, and finishes with `accept` and the final report. Never touches src/ui/.",
       "files": []
     },
     {
