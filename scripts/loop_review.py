@@ -64,14 +64,19 @@ def fingerprint(paths):
     """Hash of tracked diff (staged+unstaged) plus untracked file contents, scoped to paths."""
     h = hashlib.sha256()
     h.update(git("diff", "HEAD", "--", *paths, check=False).encode())
-    untracked = git("ls-files", "--others", "--exclude-standard", "--", *paths, check=False).split()
+    # -z: NUL-separated and unquoted, so paths with spaces, newlines or non-ASCII
+    # characters survive intact. Splitting plain `ls-files` output would corrupt them
+    # and silently drop those files from the hash.
+    out = git("ls-files", "-z", "--others", "--exclude-standard", "--", *paths, check=False)
+    untracked = [p for p in out.split("\0") if p]
     for p in sorted(untracked):
         h.update(p.encode())
         try:
             with open(p, "rb") as f:
                 h.update(f.read())
-        except OSError:
-            pass
+        except OSError as e:
+            # Fold the failure in: an unreadable file must not hash like an empty one.
+            h.update(f"<unreadable:{e.errno}>".encode())
     return h.hexdigest()[:16]
 
 
