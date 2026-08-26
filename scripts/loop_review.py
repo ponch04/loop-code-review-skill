@@ -147,8 +147,8 @@ def last_pass(state):
     return state["passes"][-1] if state["passes"] else None
 
 
-def current_validation(state):
-    """Validation runs for the current fingerprint, latest result per command.
+def validation_at(state, fp):
+    """Validation runs at fingerprint `fp`, latest non-retracted result per command.
 
     Re-running the same command on unchanged files supersedes its earlier result, so a
     flaky or environment failure can be cleared by re-running it — not only by editing.
@@ -157,9 +157,34 @@ def current_validation(state):
     """
     latest = {}
     for v in state["validation"]:
-        if v["fingerprint"] == state["fingerprint_current"] and not v.get("retracted"):
+        if v["fingerprint"] == fp and not v.get("retracted"):
             latest[v["cmd"]] = v
-    return list(latest.values())
+    return latest
+
+
+def current_validation(state):
+    return list(validation_at(state, state["fingerprint_current"]).values())
+
+
+def missing_since_last_pass(state):
+    """Commands the last pass rested on that have no record on the current state.
+
+    Evidence may not silently shrink: after a fix batch, re-running one quick check would
+    otherwise be enough to open the next pass, and acceptance only ever looks at the
+    commands present on the accepted fingerprint. So a later pass may not be granted on a
+    weaker set than the pass before it (SKILL.md steps 2 and 5).
+    """
+    lp = last_pass(state)
+    if lp is None or lp["fingerprint"] == state["fingerprint_current"]:
+        return []
+    prior = validation_at(state, lp["fingerprint"])
+    present = validation_at(state, state["fingerprint_current"])
+    # A record retracted on the current state is a deliberate retirement of that check —
+    # the command does not exist here any more (or a human forced it). Without this the
+    # set could only ever grow, and `validate-drop` could not do what its message promises.
+    retired = {v["cmd"] for v in state["validation"]
+               if v["fingerprint"] == state["fingerprint_current"] and v.get("retracted")}
+    return [c for c in prior if c not in present and c not in retired]
 
 
 def print_validation(cur, header="validation on current state"):
@@ -305,6 +330,12 @@ def cmd_pass_start(a):
     if any(v["exit"] != 0 for v in cur):
         die("validation is red for the current state; fix it, or re-run the command if the failure was environmental "
             "(if it never ran at all — typo, missing tool — retract it with `validate-drop`)")
+    missing = missing_since_last_pass(state)
+    if missing and not a.force:
+        die(f"pass {lp['n']} rested on {len(missing)} check(s) not re-run since the change: "
+            + "; ".join(f"`{c}`" for c in missing)
+            + " — re-run them. A check that never ran here (typo, missing tool) can be retracted with "
+              "`validate-drop`; retiring one that still runs is a human decision (--force).")
     state["passes"].append({"n": n, "opened": now(), "fingerprint": state["fingerprint_current"], "result": None})
     save(state)
     print(f"pass {n}/{state['max_passes']} opened on fingerprint {state['fingerprint_current']}")

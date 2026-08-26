@@ -73,7 +73,9 @@ and judged against `expected_output`. There is no CI.
   hash of the scoped diff-vs-HEAD plus untracked contents. Validation from a different
   fingerprint is not evidence; a review of an unchanged fingerprint is not a new pass.
   Within one fingerprint the **latest run of each command wins**, so re-running clears an
-  environmental or flaky failure; distinct commands are never conflated.
+  environmental or flaky failure; distinct commands are never conflated. Evidence may not
+  shrink: a new pass must carry every check the previous pass rested on, unless that check
+  was retracted on the current state.
 - **Reviewer context isolation.** The reviewer receives `references/reviewer-prompt.md`
   filled in, and nothing else — no author rationale, no suspected issues, no prior reviewer
   output. Any change that leaks author context into the reviewer defeats the skill.
