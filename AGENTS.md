@@ -45,7 +45,7 @@ python3 scripts/loop_review.py validate -- true
 python3 scripts/loop_review.py pass-start
 python3 scripts/loop_review.py pass-record --score 9.5 --findings 0 --understood --test-evidence trusted
 python3 scripts/loop_review.py accept          # expect exit 0
-python3 scripts/loop_review.py reset && rmdir .loop-review
+python3 scripts/loop_review.py reset          # removes .loop-review/ as well
 ```
 
 `evals/evals.json` is not a runnable suite — the prompts are executed against a real runtime

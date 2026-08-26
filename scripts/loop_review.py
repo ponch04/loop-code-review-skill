@@ -451,6 +451,13 @@ def cmd_reset(a):
     os.chdir(repo_root())
     if os.path.exists(STATE_FILE):
         os.remove(STATE_FILE)
+    try:
+        os.rmdir(STATE_DIR)
+    except OSError:
+        # Empty-only by design: rmdir refuses a non-empty directory, and the script has no
+        # business deleting anything a user put in there. Missing directory is fine too.
+        if os.path.isdir(STATE_DIR):
+            print(f"note: {STATE_DIR}/ kept — it holds files this script did not create")
     print("state cleared")
 
 
