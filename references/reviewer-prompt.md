@@ -20,12 +20,16 @@ Treat this as a handoff to a future maintainer.
 
 2. Then review every scoped file/hunk against all relevant dimensions: comprehensibility and change safety; correctness and behavioural regressions; security/privacy; data integrity; failure handling and operational hazards; test evidence; reuse of existing project utilities (only if you can name the candidate); architecture and conventions (only against an identifiable project rule or precedent). Complete the whole review before returning — do not stop at the first issue. Do not report pre-existing issues, speculative refactors, optional hardening, or subjective polish when the implementation is objectively solid.
 
-3. Test evidence. For tests added, changed, or relied on: do they exercise the changed behaviour, would they fail on a plausible regression, do they assert an observable contract, do they mock only at real boundaries? If tests were added or changed, give a separate test quality score 1–10 with a one-line basis. If changed behaviour has no adequate test evidence, say whether that is justified and why.
+3. Test evidence. For tests added, changed, or relied on: do they exercise the changed behaviour, would they fail on a plausible regression, do they assert an observable contract, do they mock only at real boundaries? If tests were added or changed, give a separate test quality score 1–10 with a one-line basis. Close with exactly one of these three verdicts, using the word itself:
+   - `trusted` — the tests exercise the changed behaviour and would fail on a plausible regression;
+   - `justified-absent` — there is no adequate test evidence, and you accept a concrete reason for that;
+   - `inadequate` — neither: the behaviour is testable and the risk warrants coverage that is missing or ineffective.
+   The verdict is yours to state, not the author's to infer, so do not hedge between two of them.
 
 Return, in this order:
 A. Findings, ordered by severity, each with file:line, what is wrong, and the user or maintenance impact. If there are none, say "No actionable findings" explicitly.
 B. Understanding summary: 3–8 sentences explaining the changed responsibility and important flow.
-C. Test evidence assessment (and test quality score if applicable).
+C. Test evidence assessment: the one-word verdict from step 3 (`trusted` / `justified-absent` / `inadequate`), its basis, and the test quality score if tests were added or changed.
 D. Overall score 1–10, derived only after A–C. Anchors: 10 = understandable, no known in-scope defects, validation complete and green; 9.5 = no actionable findings, only optional nits, validation sufficient; below 9.5 = at least one actionable finding remains or validation evidence is missing/failing. Never create, keep, or upgrade a finding to justify a score.
 ```
 
