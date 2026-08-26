@@ -162,6 +162,19 @@ def current_validation(state):
     return list(latest.values())
 
 
+def print_validation(cur, header="validation on current state"):
+    """One rendering of validation state for every text-mode command.
+
+    `references/reviewer-prompt.md` is filled from `status`, and its validation section
+    needs each command with its exit code — an aggregate GREEN/RED line cannot be
+    transcribed into the reviewer's prompt.
+    """
+    print(f"{header}: {len(cur)} command(s), " +
+          ("GREEN" if cur and all(v["exit"] == 0 for v in cur) else "RED/none"))
+    for v in cur:
+        print(f"  - {v['cmd']}  -> exit {v['exit']}")
+
+
 def blockers(state):
     """Return list of reasons acceptance is not possible. Empty list == accepted."""
     reasons = []
@@ -271,9 +284,7 @@ def cmd_validate_drop(a):
         v["retracted"] = {"at": now(), "reason": a.reason or ("forced" if a.force else "never ran")}
     save(state)
     print(f"retracted {len(hits)} record(s) for `{cmd}`")
-    cur = current_validation(state)
-    print(f"validation on current state: {len(cur)} command(s), " +
-          ("GREEN" if cur and all(v["exit"] == 0 for v in cur) else "RED/none"))
+    print_validation(current_validation(state))
 
 
 def cmd_pass_start(a):
@@ -300,9 +311,7 @@ def cmd_pass_start(a):
     print("scope:")
     for p in state["scope"]:
         print(f"  - {p}")
-    print("validation for this state:")
-    for v in cur:
-        print(f"  - {v['cmd']}  -> exit {v['exit']}")
+    print_validation(cur, "validation for this state")
 
 
 def cmd_pass_record(a):
@@ -429,8 +438,7 @@ def cmd_status(a):
             print(f"  #{p['n']}  score {r['score']}  findings {r['resolved']}/{r['findings']} resolved  understood={r['understood']}  test-evidence={r.get('test_evidence')}  test-score={r['test_score']}")
         else:
             print(f"  #{p['n']}  (open)")
-    cur = current_validation(state)
-    print(f"validation on current state: {len(cur)} command(s), " + ("GREEN" if cur and all(v['exit'] == 0 for v in cur) else "RED/none"))
+    print_validation(current_validation(state))
     print("blockers: " + ("none — ready to accept" if not state["blockers"] else "; ".join(state["blockers"])))
 
 
