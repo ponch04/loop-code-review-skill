@@ -156,9 +156,20 @@ def diff_base():
 def fingerprint(paths):
     """Hash of tracked diff (staged+unstaged) plus untracked file contents, scoped to paths."""
     h = hashlib.sha256()
+
+    def field(b):
+        """Feed one length-prefixed field, so the boundary between fields is unambiguous.
+
+        Concatenating a path with its contents lets distinct states hash alike: file `a`
+        holding "bc" and file `ab` holding "c" both produce b"abc". Two different states
+        with one fingerprint is the gate-breaking lie — `pass-start` would call the change
+        unchanged, and a stale review would still count as current.
+        """
+        h.update(str(len(b)).encode() + b"\0" + b)
+
     # check=True on both git calls: a failure here must be loud. A silently empty hash is
     # indistinguishable from "nothing changed", which is the one lie that breaks every gate.
-    h.update(git("diff", diff_base(), "--", *paths))
+    field(git("diff", diff_base(), "--", *paths))
     # -z: NUL-separated and unquoted, so paths with spaces, newlines or non-ASCII
     # characters survive intact. Splitting plain `ls-files` output would corrupt them
     # and silently drop those files from the hash.
@@ -166,13 +177,13 @@ def fingerprint(paths):
     # Kept as bytes: a filename need not be decodable, and open() takes bytes paths.
     untracked = [p for p in out.split(b"\0") if p]
     for p in sorted(untracked):
-        h.update(p)
+        field(p)
         try:
             with open(p, "rb") as f:
-                h.update(f.read())
+                field(f.read())
         except OSError as e:
             # Fold the failure in: an unreadable file must not hash like an empty one.
-            h.update(f"<unreadable:{e.errno}>".encode())
+            field(f"<unreadable:{e.errno}>".encode())
     return h.hexdigest()[:16]
 
 
