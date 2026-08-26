@@ -98,14 +98,29 @@ def save(state):
         json.dump(state, f, indent=2)
 
 
+def diff_base():
+    """`HEAD`, or the empty tree while the repository has no commit yet.
+
+    `git diff HEAD` exits 128 on an unborn branch. With `check=False` that produced an
+    empty diff, so a staged file — invisible to `ls-files --others` — left the fingerprint
+    constant and the loop blind to every change in it. The empty-tree id is asked of git
+    rather than hardcoded, so this also holds in sha256 repositories.
+    """
+    if git("rev-parse", "--verify", "--quiet", "HEAD", check=False).strip():
+        return "HEAD"
+    return git_text("hash-object", "-t", "tree", os.devnull).strip()
+
+
 def fingerprint(paths):
     """Hash of tracked diff (staged+unstaged) plus untracked file contents, scoped to paths."""
     h = hashlib.sha256()
-    h.update(git("diff", "HEAD", "--", *paths, check=False))
+    # check=True on both git calls: a failure here must be loud. A silently empty hash is
+    # indistinguishable from "nothing changed", which is the one lie that breaks every gate.
+    h.update(git("diff", diff_base(), "--", *paths))
     # -z: NUL-separated and unquoted, so paths with spaces, newlines or non-ASCII
     # characters survive intact. Splitting plain `ls-files` output would corrupt them
     # and silently drop those files from the hash.
-    out = git("ls-files", "-z", "--others", "--exclude-standard", "--", *paths, check=False)
+    out = git("ls-files", "-z", "--others", "--exclude-standard", "--", *paths)
     # Kept as bytes: a filename need not be decodable, and open() takes bytes paths.
     untracked = [p for p in out.split(b"\0") if p]
     for p in sorted(untracked):
