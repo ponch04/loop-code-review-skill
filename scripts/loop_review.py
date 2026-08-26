@@ -8,7 +8,8 @@ exit condition holds. No dependencies beyond git and Python 3.8+.
 Commands:
   init [--max-passes N] -- <paths...>      start a loop over task-owned paths
   validate -- <command...>                 run a validation command, record result
-  validate-drop [--force] -- <command...>  retract a record for a command that never ran
+  validate-drop [--force] -- <command...>  retract a record for a command that never ran,
+                                           or (--force) retire a check inherited from the last pass
   pass-start                               open a full-review pass (checks gates)
   pass-record --score S --findings N --test-evidence {trusted|justified-absent|inadequate}
               [--understood] [--test-score T] [--note TEXT]
@@ -293,7 +294,10 @@ def cmd_validate_drop(a):
     state["fingerprint_current"] = fingerprint(state["scope"])
     hits = [v for v in state["validation"]
             if v["cmd"] == cmd and v["fingerprint"] == state["fingerprint_current"] and not v.get("retracted")]
-    if not hits:
+    lp = last_pass(state)
+    inherited = (not hits and lp is not None and lp["fingerprint"] != state["fingerprint_current"]
+                 and cmd in validation_at(state, lp["fingerprint"]))
+    if not hits and not inherited:
         print(f"loop-review: no validation record for `{cmd}` at the current state", file=sys.stderr)
         cur = current_validation(state)
         if cur:
@@ -301,6 +305,23 @@ def cmd_validate_drop(a):
             for v in cur:
                 print(f"  - {v['cmd']}  -> exit {v['exit']}", file=sys.stderr)
         sys.exit(1)
+    if inherited:
+        # A check carried over from the last pass, not re-run here. `pass-start` only opens
+        # a pass on green validation, so anything in that set passed — retiring it weakens
+        # the evidence the review was granted on, and that is a human call, never the
+        # agent's. The record itself is never rewritten: history stays append-only and the
+        # retirement is stamped on the state where it was decided.
+        if not a.force:
+            die(f"`{cmd}` was green for pass {lp['n']} and has not been re-run on the current state; "
+                "re-run it, or retire it with --force (that weakens the evidence set)")
+        state["validation"].append({
+            "cmd": cmd, "exit": None, "at": now(), "fingerprint": state["fingerprint_current"],
+            "retracted": {"at": now(), "reason": a.reason or f"retired: inherited from pass {lp['n']}, not re-run"},
+        })
+        save(state)
+        print(f"retired `{cmd}` — inherited from pass {lp['n']}, not re-run on this state")
+        print_validation(current_validation(state))
+        return
     ran = [v for v in hits if v["exit"] not in NEVER_RAN]
     if ran and not a.force:
         die(f"`{cmd}` ran and returned exit {ran[-1]['exit']} — that is a result, not a mistake; "
@@ -335,7 +356,8 @@ def cmd_pass_start(a):
         die(f"pass {lp['n']} rested on {len(missing)} check(s) not re-run since the change: "
             + "; ".join(f"`{c}`" for c in missing)
             + " — re-run them. A check that never ran here (typo, missing tool) can be retracted with "
-              "`validate-drop`; retiring one that still runs is a human decision (--force).")
+              "`validate-drop`; retiring one that was green for the last pass needs "
+              "`validate-drop --force`, a human decision.")
     state["passes"].append({"n": n, "opened": now(), "fingerprint": state["fingerprint_current"], "result": None})
     save(state)
     print(f"pass {n}/{state['max_passes']} opened on fingerprint {state['fingerprint_current']}")
