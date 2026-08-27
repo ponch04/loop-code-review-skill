@@ -135,9 +135,21 @@ def load():
 
 
 def save(state):
+    """Write the state atomically: temp file in the same directory, then os.replace.
+
+    state.json is the whole loop — scope, passes, findings, validation history. A partial
+    write from a Ctrl-C or a full disk would leave it truncated, and every later command
+    would refuse to load it, so an interrupted run would cost the entire review history.
+    os.replace is atomic on POSIX and Windows, so readers see either the old file or the
+    new one, never a half-written one.
+    """
     os.makedirs(STATE_DIR, exist_ok=True)
-    with open(STATE_FILE, "w") as f:
+    tmp = STATE_FILE + ".tmp"
+    with open(tmp, "w") as f:
         json.dump(state, f, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, STATE_FILE)
 
 
 def diff_base():
@@ -536,8 +548,9 @@ def cmd_fingerprint(a):
 
 def cmd_reset(a):
     os.chdir(repo_root())
-    if os.path.exists(STATE_FILE):
-        os.remove(STATE_FILE)
+    for f in (STATE_FILE, STATE_FILE + ".tmp"):
+        if os.path.exists(f):
+            os.remove(f)
     try:
         os.rmdir(STATE_DIR)
     except OSError:
