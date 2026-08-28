@@ -33,6 +33,17 @@ the author's reasoning. Independence is the product.
 4. `evals/evals.json` — the behavioural spec of the *agent*, not of the code. Changing
    workflow behaviour without updating the affected eval is an incomplete change.
 
+## Layout
+
+```
+SKILL.md                            workflow, both scopes
+scripts/loop_review.py              state machine + project ledger
+references/reviewer-prompt.md       task-mode reviewer (a diff)
+references/reviewer-prompt-area.md  project-mode reviewer (an inherited area)
+references/review-dimensions.md     what counts as an actionable finding
+evals/evals.json                    behavioural spec for the agent
+```
+
 ## Build and test
 
 No build, no package manager, no dependencies. Python 3.8+ stdlib and `git` only.
@@ -69,9 +80,11 @@ and judged against `expected_output`. There is no CI.
   Do not add a fifth condition, and do not let any of them become advisory. All four are
   checked in `blockers()`; understanding and test evidence are agent-recorded verdicts
   (`--understood`, `--test-evidence`) because the script cannot judge them itself.
-- **Fingerprint identity.** A pass, a validation run and an acceptance are all bound to the
-  hash of the scoped diff against HEAD (or the empty tree on an unborn branch) plus untracked
-  contents. Validation from a different
+- **Fingerprint identity.** A pass, a validation run and an acceptance are all bound to a
+  hash of the reviewed state. In `changes` mode that is the scoped diff against `--base`
+  (default HEAD; the empty tree on an unborn branch) plus untracked contents; in `project`
+  mode it is the contents of every file under the area, because an inherited area has no
+  diff — its identity is what it contains. Validation from a different
   fingerprint is not evidence; a review of an unchanged fingerprint is not a new pass.
   Within one fingerprint the **latest run of each command wins**, so re-running clears an
   environmental or flaky failure; distinct commands are never conflated. Evidence may not
@@ -84,6 +97,13 @@ and judged against `expected_output`. There is no CI.
   Detail belongs in `references/`, which is read on demand. Growth there is a real cost.
 - **Scope is task-owned paths, decided from task history — never `git status` alone.** When
   ownership is ambiguous, the workflow asks the user. Unrelated worktree work is untouched.
+- **Project review is a queue of area loops, not one big loop.** `project.json` is a ledger
+  only: which areas exist, in what order, and each one's outcome. Every area runs the same
+  state machine with the same gates and the same per-area pass limit; the project finishes
+  when every area has an outcome, never when a count runs out. Areas come from the agent's
+  reading of the repository structure; the script does not derive them. `--report-only`
+  exists because a fix in one area can break another: in that mode an area is `reviewed`
+  when its findings are on disk in `.loop-review/findings/`, and nothing is edited.
 - **Escape hatches stay explicit.** `--force` on `pass-start`/`init`/`validate-drop` exists
   so a human can override; it must remain opt-in and never be used by the agent on its own
   initiative. `validate-drop` without `--force` retracts only records whose exit status means
