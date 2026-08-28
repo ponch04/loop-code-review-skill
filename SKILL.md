@@ -1,6 +1,6 @@
 ---
 name: loop-code-review
-description: Iterative review-and-fix loop over the current task's git changes using fresh, context-isolated reviewer sub-agents, with a script-enforced exit condition (green validation + zero unresolved findings). Use whenever the user asks for a looped or repeated code review, "review until clean", "keep fixing until a reviewer signs off", independent/sub-agent review of their changes, or invokes /loop-code-review — even if they don't say "loop".
+description: Iterative review-and-fix loop using fresh, context-isolated reviewer sub-agents, with a script-enforced exit condition (green validation + zero unresolved findings). Two scopes — the current task's changes, or a whole project reviewed area by area as a queue of loops. Use whenever the user asks for a looped or repeated code review, "review until clean", "keep fixing until a reviewer signs off", an independent/sub-agent review of their changes, a full review of the project or codebase, or invokes /loop-code-review — even if they don't say "loop".
 ---
 
 # Loop Code Review
@@ -22,13 +22,18 @@ The numeric score (1–10) is a **progress signal only**. It never triggers work
 
 ## Workflow
 
-**0. Scope.** Decide which files/hunks belong to *this task* from the task history and your own edits — not from `git status` alone. If ownership is ambiguous, ask the user. Never stage, commit, stash, reset or push unless asked.
+**0. Scope.** First decide which of the two scopes the user wants. "Review my changes / this task / this PR" → task mode below. "Review the project / the codebase / everything / module X as a whole" → **project mode**, see the section at the end; it drives this same loop once per area.
+
+Task mode: decide which files/hunks belong to *this task* from the task history and your own edits — not from `git status` alone. If ownership is ambiguous, ask the user. Never stage, commit, stash, reset or push unless asked.
 
 ```bash
 python3 scripts/loop_review.py init --max-passes 5 -- <task-owned paths...>
+python3 scripts/loop_review.py init --base <ref> -- <paths...>   # task already committed: diff against the parent of its first commit
 ```
 
-**1. Validate** the current state with the smallest meaningful checks for the touched surface (focused tests, typecheck, lint, build). Fix red validation before asking for a review.
+If `init` warns that the scoped diff is empty, stop and pass `--base`; a loop on an empty fingerprint cannot see your changes and every gate is blind.
+
+**1. Validate** the current state with the smallest meaningful checks for the touched surface (focused tests, typecheck, lint, build). Fix red validation before asking for a review. A check that is also red on the base state, before your change, is not evidence about your change — narrow it to the delta instead of recording a global repository invariant; if you already recorded one, retract it with `validate-drop --force --reason ...` and say so in the report.
 
 ```bash
 python3 scripts/loop_review.py validate -- <command>      # repeat per command
@@ -75,6 +80,31 @@ python3 scripts/loop_review.py status --json
 ```
 
 Reaching the pass limit without acceptance is an **incomplete outcome**; report the exact blocker, don't lower the bar. Continue past the limit only if the user explicitly asked for persistence until acceptance.
+
+## Project mode — the whole codebase, one area at a time
+
+A project is too large for one reviewer to hold; "review everything" means a **queue of area loops**, each with its own five passes, run until every area has an outcome. The per-loop limit bounds one area, not the project.
+
+**P0. Map the areas.** Derive them from the repository structure — packages, apps, services, top-level modules — not from `git status`. Aim for areas a single reviewer can actually read (a few thousand lines); split big packages by subdirectory. List them in dependency order where it matters (shared libs before their consumers). Show the list to the user once; then run without further questions.
+
+```bash
+python3 scripts/loop_review.py project init --max-passes 5 [--report-only] -- <area paths in order>
+```
+
+`--report-only` collects findings without fixing: use it by default for a first full review, or whenever fixes in one area could ripple into others. Without it the loop fixes each area as in task mode, and validation after each batch must cover the whole project, not just the area.
+
+**P1. Loop over areas.** Each iteration is the normal workflow above, in `project` mode (the fingerprint is the area's content, so any fix moves it):
+
+```bash
+python3 scripts/loop_review.py project next          # opens the loop for the next pending area
+# steps 1–6 as above, with references/reviewer-prompt-area.md instead of reviewer-prompt.md
+# write the reviewer's findings verbatim to the findings file `project next` printed
+python3 scripts/loop_review.py project close         # records accepted / reviewed / incomplete, frees the loop
+```
+
+`project close` refuses a report-only area whose findings were not written to its file — the ledger is only useful if the findings survive the session. An area that hits the pass limit is closed as `incomplete` with its blocker and the queue continues; do not stop the project on one stuck area.
+
+**P2. Resume and finish.** If the session was interrupted, `project status` shows where it stopped; `project next` continues from the first pending area. When nothing is pending, report per area: outcome, passes, findings (resolved/total), score, blocker if any, and the path of each findings file — `project status --json` has all of it.
 
 ## Review dimensions
 
