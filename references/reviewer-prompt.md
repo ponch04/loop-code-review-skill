@@ -1,29 +1,40 @@
-# Reviewer prompt — project mode (one area)
+# Reviewer prompt template
 
-Used by the project loop instead of `reviewer-prompt.md`. The reviewer inherits an **area** as it stands; everything in it is in scope, including what was there before anyone on this task touched it. Fill `<...>` from `loop_review.py status` and send this — and nothing else.
+Fill the `<...>` fields from `loop_review.py status` and send this — and nothing else — to a fresh sub-agent. Do not add your own rationale, suspected issues, proposed fixes, or earlier reviewer output.
 
 ```text
 You are an independent code reviewer. Repository: <absolute path>.
 You have no prior conversation history. Derive every conclusion from the repository state and command output you inspect yourself. Stay read-only: do not edit, stage, commit, reset, stash or push.
 
-You are inheriting this area of the codebase and will be responsible for maintaining it:
-- Area: <path>
-- Everything under that path is in scope. Neighbouring code may be read for context; report findings only for code inside the area, or for area code that misuses something outside it.
+Review ONLY these task-owned changes (the worktree may contain unrelated work; ignore it unless the scoped changes depend on it or make it worse):
+- Files / untracked files: <paths>
+- Mixed-file hunks to include: <describe, or "none">
+- Excluded unrelated changes: <paths, or "none">
 
 Validation already run by the author (you may re-run):
 - <command> -> <exit code>
 
-Treat this as a handoff: the original authors are gone.
+Treat this as a handoff to a future maintainer.
 
-1. Understand first. Map the area: its responsibility, entry points, main control/data flows, the invariants it relies on, its failure behaviour, and how it is exercised by tests. Read enough of it to explain it; do not sample three files and extrapolate. If a part cannot be explained after reasonable inspection, that is a finding: name the exact symbol or flow, what is unclear, and a concrete future change or diagnosis it makes risky.
+1. Understand first. Reconstruct what the change does, its main control/data flow, the invariants it relies on, its failure behaviour, and the reason for any non-obvious decision. Inspect `git status --short`, the scoped diffs, and neighbouring code as needed. If after reasonable inspection you cannot explain a part, that is itself a finding: name the exact symbol or flow, what is unclear, and a concrete future change or diagnosis it makes risky. Unfamiliar domain logic is not poor maintainability.
 
-2. Then review the whole area against every relevant dimension: comprehensibility and change safety; correctness and latent bugs; security/privacy; data integrity; failure handling and operational hazards; test evidence; reuse of existing project utilities (only if you can name the candidate); architecture and conventions (only against an identifiable project rule or precedent). Complete the review before returning — do not stop at the first issue and do not stop when the list feels long enough. Pre-existing problems ARE in scope here. Do not report speculative refactors, optional hardening, or subjective polish where the code is objectively solid.
+2. Then review every scoped file/hunk against all relevant dimensions: comprehensibility and change safety; correctness and behavioural regressions; security/privacy; data integrity; failure handling and operational hazards; test evidence; reuse of existing project utilities (only if you can name the candidate); architecture and conventions (only against an identifiable project rule or precedent). Complete the whole review before returning — do not stop at the first issue. Do not report pre-existing issues, speculative refactors, optional hardening, or subjective polish when the implementation is objectively solid.
 
-3. Test evidence. Judge the area's tests as a maintainer would rely on them: do they exercise the important behaviour, would they fail on a plausible regression, do they assert observable contracts, do they mock only at real boundaries? Give a test quality score 1–10 with a one-line basis, and say which important behaviour has no adequate evidence and whether that is justified.
+3. Test evidence. For tests added, changed, or relied on: do they exercise the changed behaviour, would they fail on a plausible regression, do they assert an observable contract, do they mock only at real boundaries? If tests were added or changed, give a separate test quality score 1–10 with a one-line basis. If changed behaviour has no adequate test evidence, say whether that is justified and why.
 
 Return, in this order:
 A. Findings, ordered by severity, each with file:line, what is wrong, and the user or maintenance impact. If there are none, say "No actionable findings" explicitly.
-B. Understanding summary: 5–12 sentences explaining the area's responsibility, entry points and important flows.
-C. Test evidence assessment with test quality score.
-D. Overall score 1–10, derived only after A–C. Anchors: 10 = understandable, no known defects, tests trustworthy; 9.5 = no actionable findings, only optional nits; below 9.5 = at least one actionable finding remains or test evidence is inadequate. Never create, keep, or upgrade a finding to justify a score.
+B. Understanding summary: 3–8 sentences explaining the changed responsibility and important flow.
+C. Test evidence assessment (and test quality score if applicable).
+D. Overall score 1–10, derived only after A–C. Anchors: 10 = understandable, no known in-scope defects, validation complete and green; 9.5 = no actionable findings, only optional nits, validation sufficient; below 9.5 = at least one actionable finding remains or validation evidence is missing/failing. Never create, keep, or upgrade a finding to justify a score.
+```
+
+## Adjudicator prompt (single disputed finding)
+
+```text
+You are an independent adjudicator. Repository: <path>. No prior context; stay read-only.
+Finding under dispute: <exact text from the reviewer, with file:line>.
+Reviewer's evidence: <quote>.
+Author's counter-evidence: <repository facts / validation output>.
+Inspect the relevant files and hunks yourself. Return an evidence-based verdict: UPHELD (explain what remains wrong) or INVALID (explain why the counter-evidence settles it). Do not review anything else.
 ```

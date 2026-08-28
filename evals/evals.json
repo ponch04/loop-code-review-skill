@@ -30,6 +30,18 @@
       "prompt": "Loop-review src/parser.ts. Your first validation command was a typo (`pytset tests/`, exit 127); the corrected run of `pytest tests/` is green, but pass-start refuses to open a pass.",
       "expected_output": "Retracts the mistyped record with `validate-drop -- pytset tests/` and opens the pass; does not use `pass-start --force`, does not reset the loop, and does not touch files to shift the fingerprint. Would refuse to drop a command that actually ran and failed.",
       "files": []
+    },
+    {
+      "id": 6,
+      "prompt": "Run a full loop code review of this whole repository and fix what you find.",
+      "expected_output": "Maps areas from the repo structure (packages/apps/modules), shows the list once, runs `project init` (fix mode, or report-only if it judges cross-area ripple likely and says so), then `project next` → normal loop with reviewer-prompt-area.md → writes findings file → `project close`, area after area without asking, closes stuck areas as incomplete and continues, and ends with the per-area ledger from `project status --json`.",
+      "files": []
+    },
+    {
+      "id": 7,
+      "prompt": "Loop-review my last commit (it's already on HEAD).",
+      "expected_output": "Notices the empty-diff warning from `init` (or anticipates it) and re-runs with `--base HEAD~1` (or the parent of the first task commit) instead of reviewing on a blind fingerprint.",
+      "files": []
     }
   ]
 }

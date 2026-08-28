@@ -23,7 +23,7 @@ Passing tests demonstrate execution, not quality. For each test used as evidence
 - Does it assert an observable contract rather than implementation detail?
 - Are mocks only at real boundaries (network, clock, filesystem), never faking the result under test?
 
-Missing tests are a finding only when the behaviour is testable and the risk warrants coverage. "Tests not needed because <concrete reason>" is an acceptable resolution — that is the `justified-absent` verdict, and it is as acceptable an outcome as `trusted`. `inadequate` is the reviewer saying neither holds; it blocks acceptance until a later pass changes it. Do not chase score-only test polish.
+Missing tests are a finding only when the behaviour is testable and the risk warrants coverage. "Tests not needed because <concrete reason>" is an acceptable resolution. Do not chase score-only test polish.
 
 ## Reuse and local fit
 
