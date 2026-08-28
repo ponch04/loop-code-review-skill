@@ -42,6 +42,7 @@ references/reviewer-prompt.md       task-mode reviewer (a diff)
 references/reviewer-prompt-area.md  project-mode reviewer (an inherited area)
 references/review-dimensions.md     what counts as an actionable finding
 evals/evals.json                    behavioural spec for the agent
+LICENSE                             MIT; keeps the upstream notice this skill derives from
 ```
 
 ## Build and test
@@ -50,8 +51,9 @@ No build, no package manager, no dependencies. Python 3.8+ stdlib and `git` only
 
 ```sh
 python3 scripts/loop_review.py --help          # smoke: argument surface parses
-# end-to-end smoke of the state machine (from a clean worktree):
-python3 scripts/loop_review.py init -- README.md
+# end-to-end smoke of the state machine (from a clean worktree). --allow-empty is what
+# makes it work there: on a clean tree the scoped diff is empty and `init` exits 2.
+python3 scripts/loop_review.py init --allow-empty --task-brief "smoke" -- README.md
 python3 scripts/loop_review.py validate -- true
 python3 scripts/loop_review.py pass-start
 python3 scripts/loop_review.py pass-record --score 9.5 --findings 0 --understood --test-evidence trusted
@@ -93,6 +95,27 @@ and judged against `expected_output`. There is no CI.
 - **Reviewer context isolation.** The reviewer receives `references/reviewer-prompt.md`
   filled in, and nothing else — no author rationale, no suspected issues, no prior reviewer
   output. Any change that leaks author context into the reviewer defeats the skill.
+- **The task brief is the one thing that crosses that boundary**, and only as requirements
+  and acceptance criteria. The line is: what the task had to achieve is a fact about the
+  task; how the author achieved it, what they suspect is wrong, and what they propose to do
+  are author reasoning and stay out. Without a brief the reviewer can only check that the
+  implementation is self-consistent — it cannot report a missed requirement, which is why
+  requirement conformance is a review dimension that goes silent when none was recorded.
+  The brief is recorded once in `state.json` by `init --task-brief` and echoed by `status`
+  and `pass-start`, for the same reason the pass count is: a brief retyped per pass drifts,
+  and a drifting brief silently redefines what "satisfies the task" means between passes.
+- **An empty scope is an outcome, not a warning.** `init` in `changes` mode exits `2`
+  (`NO_CHANGES`) on an empty fingerprint, because such a loop passes every gate: nothing
+  runs against no change, the diff never moves, and `accept` sees no blocker. The workflow
+  answer is `--base` for committed work, corrected paths, or reporting `no-changes` and
+  stopping. `--allow-empty` is the explicit hatch and belongs to the human, like `--force`.
+  Test emptiness against `EMPTY_FINGERPRINT`, never against `fingerprint([])` — an unscoped
+  fingerprint hashes the whole repository's diff, which is byte-identical to the scoped one
+  whenever the scope is the only thing that changed.
+- **An unusable reviewer or adjudicator never resolves a finding.** Each is asked once for
+  what it left out; an unusable reviewer may be replaced once by a fresh one. If output is
+  still unusable, the finding stays unresolved and the outcome is INCOMPLETE. Silence is
+  not a verdict.
 - **SKILL.md stays short (~100 lines).** It is loaded into the agent's context every time.
   Detail belongs in `references/`, which is read on demand. Growth there is a real cost.
 - **Scope is task-owned paths, decided from task history — never `git status` alone.** When
@@ -125,8 +148,10 @@ and judged against `expected_output`. There is no CI.
   aggregates and `resolved` is clamped to `findings`. Per-finding tracking was rejected as
   bookkeeping the model would get wrong; the reviewer's text is the record.
 - **`state.json` is not concurrency-safe.** One agent per worktree is the assumption.
-- **Score anchors appear in both SKILL.md and `references/review-dimensions.md`.** Intended
-  duplication: progressive disclosure, so the anchors survive without the reference file.
+- **Score anchors are duplicated across both reviewer prompts and
+  `references/review-dimensions.md`.** Intended: the prompts are sent standalone to agents
+  that never see the reference file, so the anchors have to travel with them. Keep the four
+  bands identical in all three when changing them.
 - **The state machine cannot detect a lying agent.** It gates procedure, not honesty. That
   is a known and accepted limit — do not propose "verification" of reviewer output.
 - **Prose is prescriptive and repetitive.** These files are prompts. Redundancy that would

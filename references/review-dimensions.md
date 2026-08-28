@@ -2,6 +2,16 @@
 
 Read this when triaging a finding you're unsure about, or when a reviewer's finding looks like preference dressed as risk. A finding is actionable when it names a **specific location**, a **concrete risk or defect**, and the **evidence** in the repository. Anything else is a comment.
 
+## Requirement conformance
+
+Only when a task brief was recorded (`init --task-brief`). The reviewer checks the change against what the task had to achieve, not only against itself — an implementation can be flawless and still not do the job.
+
+- Actionable: "The brief requires retries to stop after 30s total; `client.ts:88` caps attempts at 5 with no wall-clock bound, so a slow endpoint retries for minutes." Names the requirement and the observed behaviour.
+- Not actionable: a requirement the brief does not contain. A reviewer that invents acceptance criteria is reviewing a different task; withdraw it and say so.
+- A partially met requirement is a finding, not a nit. So is one met in a way the brief excludes.
+
+Without a brief this dimension is silent — that is the cost of not recording one, and `status` says so on every pass.
+
 ## Comprehensibility and change safety
 
 Test: could a competent engineer without the author reconstruct the change's responsibility, main control/data flow, state transitions, invariants, and failure behaviour from names, types, boundaries and structure?
@@ -35,9 +45,10 @@ Derive boundaries from the scoped code, neighbours, and project guidance (CLAUDE
 
 ## Score anchors
 
-- **10.0** understandable, safe to inherit, no known in-scope defects, validation complete and green.
-- **9.5** no actionable findings; only optional/subjective nits; validation sufficient and green.
-- **< 9.5** at least one actionable finding remains, or validation evidence missing/failing.
+- **10.0** understandable, safe to inherit, no known in-scope defects, brief satisfied, validation complete and green.
+- **9.5–9.9** no actionable findings; only optional/subjective nits, or evidence merely sufficient rather than complete.
+- **8.0–9.4** limited actionable findings, or gaps in validation evidence.
+- **< 8.0** substantial risk, an unmet requirement, or red validation.
 
 If score and findings conflict, findings win; treat the number as calibration noise and do not request another pass to reconcile it. If adjudication later invalidates a finding, keep the recorded score and label it pre-adjudication rather than inventing a replacement.
 
@@ -49,5 +60,6 @@ If score and findings conflict, findings win; treat the number as calibration no
 | Vague concern, no concrete finding | Ask the same reviewer once for specifics; if none, it's not a finding |
 | You disagree with a finding | Reply with repo/validation evidence; ask the same reviewer to reconsider |
 | Still disputed and material | One fresh adjudicator for that finding only |
+| Adjudicator's verdict unusable after one clarification | Finding stays unresolved; outcome is INCOMPLETE |
 | Reviewer can't give a credible review after one clarification | Replace with a fresh reviewer (explicit exception, note it in the report) |
 | Scoped files changed mid-review | Discard the review; validate; new pass |

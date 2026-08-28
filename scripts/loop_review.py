@@ -11,7 +11,8 @@ scoped paths — an inherited area reviewed as a whole. A project review is a qu
 area loops, tracked in .loop-review/project.json by the `project` commands.
 
 Commands:
-  init [--max-passes N] [--mode changes|project] [--base REF] -- <paths...>
+  init [--max-passes N] [--mode changes|project] [--base REF] [--allow-empty]
+       [--task-brief TEXT | --task-brief-file PATH] -- <paths...>
                                            start a loop over paths (task diff or whole area)
   project init [--max-passes N] [--report-only] -- <area paths...>
                                            queue a whole-project review, one loop per area
@@ -50,6 +51,18 @@ NEVER_RAN = (126, 127)
 
 TEST_EVIDENCE = ("trusted", "justified-absent", "inadequate")
 TEST_EVIDENCE_BLOCKING = "inadequate"
+
+# `init` on an empty scoped diff is not a failure of the tool, it is an outcome of the
+# workflow: there is nothing task-owned to review. It gets its own exit code so the agent
+# can tell it apart from a usage error and report `no-changes` instead of looping blind.
+NO_CHANGES = 2
+
+# fingerprint() of a scope with no diff and no untracked files: sha256 of nothing. The test
+# must be against this constant, never against `fingerprint([])` — an unscoped fingerprint
+# hashes the diff of the *whole* repository, which is byte-identical to the scoped one
+# whenever the scoped paths are the only thing changed. That is the common case, so the
+# comparison reported "empty scope" exactly when the scope was healthy.
+EMPTY_FINGERPRINT = hashlib.sha256().hexdigest()[:16]
 
 STATE_DIR = ".loop-review"
 STATE_FILE = os.path.join(STATE_DIR, "state.json")
@@ -282,29 +295,83 @@ def cmd_init(a):
     os.chdir(root)
     if os.path.exists(STATE_FILE) and not a.force:
         die("loop already active; use `reset` or `--force`")
+    if (a.task_brief or a.task_brief_file) and a.mode == "project":
+        # An inherited area has no task and therefore no acceptance criteria to miss;
+        # a brief here would only be the operator's opinion smuggled past isolation.
+        die("--task-brief applies to --mode changes only")
     if a.base:
         if a.mode == "project":
             die("--base applies to --mode changes only")
         if not git("rev-parse", "--verify", "--quiet", a.base + "^{commit}", check=False).strip():
             die(f"--base {a.base} is not a commit in this repository")
+    brief = read_task_brief(a)
     state = {
         "created": now(),
         "mode": a.mode,
         "base": a.base,
         "scope": scope,
+        "task_brief": brief,
         "max_passes": a.max_passes,
         "passes": [],
         "validation": [],
     }
     state["fingerprint_current"] = fp_of(state)
-    if a.mode == "changes" and state["fingerprint_current"] == fingerprint([], "changes"):
-        print("warning: the scoped diff is empty — if the task is already committed, re-run with "
-              "--base <ref> (e.g. the parent of the first task commit); otherwise every gate is blind",
+    # Refuse rather than warn. A loop on an empty fingerprint passes every gate — validation
+    # is green because nothing runs against a change, the diff never moves, and `accept`
+    # sees no blocker — so the one thing the script exists to prevent is exactly what an
+    # empty scope produces. The workflow outcome here is `no-changes`, not a review.
+    if a.mode == "changes" and state["fingerprint_current"] == EMPTY_FINGERPRINT:
+        if not a.allow_empty:
+            die("no task-owned changes in scope — outcome is `no-changes`. If the task is already "
+                "committed, re-run with --base <ref> (e.g. the parent of the first task commit). "
+                "If the paths are wrong, fix them. Only pass --allow-empty when you intend a loop "
+                "whose every gate is blind.", code=NO_CHANGES)
+        print("warning: scoped diff is empty and --allow-empty was given; every gate is blind",
               file=sys.stderr)
     save(state)
     print(f"loop initialised ({a.mode}{' vs ' + a.base if a.base else ''}): {len(scope)} path(s), max {a.max_passes} passes, fingerprint {state['fingerprint_current']}")
     for p in scope:
         print(f"  - {p}")
+    print_task_brief(state)
+
+
+def read_task_brief(a):
+    """The task's requirements and acceptance criteria, verbatim, or None.
+
+    Recorded once at `init` and echoed by `status` and `pass-start` so every reviewer of
+    this loop is briefed identically. Kept out of the agent's head for the same reason the
+    pass count is: a brief retyped per pass drifts, and a drifting brief silently changes
+    what "the change satisfies the task" means between passes.
+
+    This is requirements only. Author rationale, suspected issues and proposed fixes stay
+    out of it — they are what reviewer isolation exists to withhold.
+    """
+    if a.task_brief and a.task_brief_file:
+        die("use --task-brief or --task-brief-file, not both")
+    if a.task_brief_file:
+        try:
+            with open(a.task_brief_file, encoding="utf-8") as f:
+                text = f.read().strip()
+        except OSError as e:
+            die(f"--task-brief-file {a.task_brief_file}: {e.strerror}")
+        if not text:
+            die(f"--task-brief-file {a.task_brief_file} is empty")
+        return text
+    if a.task_brief:
+        return a.task_brief.strip() or None
+    return None
+
+
+def print_task_brief(state):
+    brief = state.get("task_brief")
+    if brief:
+        print("task brief (give this to the reviewer verbatim):")
+        for line in brief.splitlines():
+            print(f"  | {line}")
+    elif state.get("mode", "changes") == "changes":
+        # Silent in project mode: an inherited area has no task, so no brief is missing.
+        print("task brief: none recorded — the reviewer cannot report a missed requirement; "
+              "record one with `init --task-brief` if the task has acceptance criteria")
 
 
 def join_cmd(parts):
@@ -415,6 +482,7 @@ def cmd_pass_start(a):
     print("scope:")
     for p in state["scope"]:
         print(f"  - {p}")
+    print_task_brief(state)
     print_validation(cur, "validation for this state")
 
 
@@ -542,6 +610,7 @@ def cmd_status(a):
         return
     print(f"mode: {state.get('mode', 'changes')}" + (f" vs {state['base']}" if state.get("base") else ""))
     print(f"scope ({len(state['scope'])}): " + ", ".join(state["scope"]))
+    print_task_brief(state)
     print(f"passes: {len(state['passes'])}/{state['max_passes']}")
     for p in state["passes"]:
         r = p.get("result")
@@ -784,7 +853,7 @@ def main():
     p = argparse.ArgumentParser(prog="loop_review.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    s = sub.add_parser("init"); s.add_argument("--max-passes", type=int, default=5); s.add_argument("--mode", choices=MODES, default="changes"); s.add_argument("--base", metavar="REF", help="commit to diff against (changes mode); use for already-committed work"); s.add_argument("--force", action="store_true"); s.add_argument("paths", nargs="*"); s.set_defaults(fn=cmd_init)
+    s = sub.add_parser("init"); s.add_argument("--max-passes", type=int, default=5); s.add_argument("--mode", choices=MODES, default="changes"); s.add_argument("--base", metavar="REF", help="commit to diff against (changes mode); use for already-committed work"); s.add_argument("--task-brief", metavar="TEXT", help="the task's requirements and acceptance criteria, for the reviewer — never rationale or suspected issues"); s.add_argument("--task-brief-file", metavar="PATH", help="same, read from a file"); s.add_argument("--allow-empty", action="store_true", help="proceed on an empty scoped diff instead of reporting `no-changes`"); s.add_argument("--force", action="store_true"); s.add_argument("paths", nargs="*"); s.set_defaults(fn=cmd_init)
     s = sub.add_parser("validate"); s.add_argument("command", nargs="*"); s.set_defaults(fn=cmd_validate)
     s = sub.add_parser("validate-drop"); s.add_argument("--force", action="store_true"); s.add_argument("--reason"); s.add_argument("command", nargs="*"); s.set_defaults(fn=cmd_validate_drop)
     s = sub.add_parser("pass-start"); s.add_argument("--force", action="store_true"); s.set_defaults(fn=cmd_pass_start)

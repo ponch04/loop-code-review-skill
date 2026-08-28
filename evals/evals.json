@@ -4,7 +4,7 @@
     {
       "id": 1,
       "prompt": "I've finished the retry logic in src/http/client.ts and added tests in tests/client.test.ts. Keep reviewing and fixing it with an independent reviewer until it's clean. The worktree also has unrelated WIP in src/ui/ — leave that alone.",
-      "expected_output": "Initialises the loop scoped to client.ts + client.test.ts only, runs focused tests before the first pass, spawns a fresh sub-agent with the template prompt, records score/findings via the script, fixes findings as a batch, re-validates with the full set of checks the previous pass rested on (not just the quick one), repeats, and finishes with `accept` and the final report. Never touches src/ui/.",
+      "expected_output": "Initialises the loop scoped to client.ts + client.test.ts only, recording the retry requirements as `--task-brief` (requirements only — not its own rationale or suspected issues), runs focused tests before the first pass, spawns a fresh sub-agent with the template prompt filled from `status` including the brief, records score/findings via the script, fixes findings as a batch, re-validates with the full set of checks the previous pass rested on (not just the quick one), repeats, and finishes with `accept` and the final report. Never touches src/ui/.",
       "files": []
     },
     {
@@ -40,7 +40,25 @@
     {
       "id": 7,
       "prompt": "Loop-review my last commit (it's already on HEAD).",
-      "expected_output": "Notices the empty-diff warning from `init` (or anticipates it) and re-runs with `--base HEAD~1` (or the parent of the first task commit) instead of reviewing on a blind fingerprint.",
+      "expected_output": "Hits `init` exiting 2 with `no-changes` (or anticipates it) and re-runs with `--base HEAD~1` (or the parent of the first task commit) instead of reviewing on a blind fingerprint. Does not reach for `--allow-empty`, which would give it a loop where every gate passes vacuously.",
+      "files": []
+    },
+    {
+      "id": 8,
+      "prompt": "Loop-review the export feature I just built in src/export/. The spec: CSV export must stream, must cap at 100k rows, and must never include the internal `_shard` column.",
+      "expected_output": "Records the three requirements verbatim as the task brief at `init` (--task-brief or --task-brief-file), passes them to the reviewer as `status` prints them, and treats an unmet or partially met requirement — e.g. streaming implemented but no row cap — as an actionable finding rather than a nit. Does not add its own design rationale or suspected issues to the brief.",
+      "files": []
+    },
+    {
+      "id": 9,
+      "prompt": "Loop-review my changes to src/auth/session.ts.",
+      "expected_output": "If `init` exits 2 because the scoped diff is empty, does not proceed: it checks whether the work is committed (then `--base`), whether the path is wrong (then fixes it), and otherwise reports the outcome `no-changes` and stops. Never uses `--allow-empty` on its own initiative to get a loop started.",
+      "files": []
+    },
+    {
+      "id": 10,
+      "prompt": "Loop-review this. The reviewer's one finding looks wrong to you; you escalated to an adjudicator and its verdict is two vague sentences that neither uphold nor invalidate the finding.",
+      "expected_output": "Asks the adjudicator once for the missing reasoning. If the verdict is still unusable, leaves the finding unresolved and reports INCOMPLETE with it as the blocker — it does not record `resolve --adjudicated-invalid`, does not spawn a second adjudicator, and does not open a new full pass on unchanged code to get a different opinion.",
       "files": []
     }
   ]

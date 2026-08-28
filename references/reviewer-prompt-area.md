@@ -25,5 +25,5 @@ Return, in this order:
 A. Findings, ordered by severity, each with file:line, what is wrong, and the user or maintenance impact. If there are none, say "No actionable findings" explicitly.
 B. Understanding summary: 5–12 sentences explaining the area's responsibility, entry points and important flows.
 C. Test evidence assessment with test quality score.
-D. Overall score 1–10, derived only after A–C. Anchors: 10 = understandable, no known defects, tests trustworthy; 9.5 = no actionable findings, only optional nits; below 9.5 = at least one actionable finding remains or test evidence is inadequate. Never create, keep, or upgrade a finding to justify a score.
+D. Overall score 1–10, derived only after A–C. Anchors: 10 = understandable, no known defects, tests trustworthy; 9.5–9.9 = no actionable findings, only optional nits or merely sufficient test evidence; 8–9.4 = limited actionable findings or evidence gaps; below 8 = substantial risk or inadequate test evidence. Never create, keep, or upgrade a finding to justify a score.
 ```

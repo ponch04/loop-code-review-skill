@@ -22,16 +22,18 @@ The numeric score (1–10) is a **progress signal only**. It never triggers work
 
 ## Workflow
 
-**0. Scope.** First decide which of the two scopes the user wants. "Review my changes / this task / this PR" → task mode below. "Review the project / the codebase / everything / module X as a whole" → **project mode**, see the section at the end; it drives this same loop once per area.
+**0. Scope and brief.** First decide which of the two scopes the user wants. "Review my changes / this task / this PR" → task mode below. "Review the project / the codebase / everything / module X as a whole" → **project mode**, see the section at the end; it drives this same loop once per area.
 
 Task mode: decide which files/hunks belong to *this task* from the task history and your own edits — not from `git status` alone. If ownership is ambiguous, ask the user. Never stage, commit, stash, reset or push unless asked.
 
+Record the task's requirements and acceptance criteria with `--task-brief`. Without them a reviewer can only check that the implementation is self-consistent; it cannot tell you a requirement was missed. Requirements are facts about the task — your rationale, suspected issues and proposed fixes are not, and stay out of the brief.
+
 ```bash
-python3 scripts/loop_review.py init --max-passes 5 -- <task-owned paths...>
-python3 scripts/loop_review.py init --base <ref> -- <paths...>   # task already committed: diff against the parent of its first commit
+python3 scripts/loop_review.py init --max-passes 5 --task-brief "<requirements and acceptance criteria>" -- <task-owned paths...>
+python3 scripts/loop_review.py init --task-brief-file <path> --base <ref> -- <paths...>   # task already committed: diff against the parent of its first commit
 ```
 
-If `init` warns that the scoped diff is empty, stop and pass `--base`; a loop on an empty fingerprint cannot see your changes and every gate is blind.
+`init` exits 2 when the scoped diff is empty. Re-run with `--base` if the task is already committed, fix the paths if they are wrong — or, if there is genuinely nothing task-owned to review, report the outcome **no-changes** and stop. `--allow-empty` overrides it and gives you a loop whose every gate is blind; the script will not do that on its own.
 
 **1. Validate** the current state with the smallest meaningful checks for the touched surface (focused tests, typecheck, lint, build). Fix red validation before asking for a review. A check that is also red on the base state, before your change, is not evidence about your change — narrow it to the delta instead of recording a global repository invariant; if you already recorded one, retract it with `validate-drop --force --reason ...` and say so in the report.
 
@@ -47,7 +49,7 @@ A command that never ran (typo, missing tool) is still recorded and will block `
 python3 scripts/loop_review.py pass-start
 ```
 
-Then spawn a reviewer with the platform's fresh-context mechanism (Claude Code: `Task`/sub-agent; Codex: a new agent — never a mode that inherits history). Give it **only** the prompt from `references/reviewer-prompt.md` filled with repo path, scope from `status`, and validation commands. Do not pass your rationale, suspected issues, or earlier reviewer output.
+Then spawn a reviewer with the platform's fresh-context mechanism (Claude Code: `Task`/sub-agent; Codex: a new agent — never a mode that inherits history). Give it **only** the prompt from `references/reviewer-prompt.md` filled with repo path, scope, task brief and validation commands as `status` prints them. Do not pass your rationale, suspected issues, or earlier reviewer output.
 
 **3. Record the result** exactly as the reviewer returned it:
 
@@ -58,7 +60,7 @@ python3 scripts/loop_review.py pass-record --score 8.5 --findings 3 --understood
 
 `--test-evidence` is the reviewer's verdict on exit condition 4, not your own: `trusted` = the tests exercise the changed behaviour, `justified-absent` = the reviewer accepted a concrete reason for having none, `inadequate` = neither, which blocks acceptance until a later pass or an `amend` changes it.
 
-**4. Triage findings** as review comments, not orders. Fix all concrete actionable ones as one coherent batch. Reject a finding only with repository/validation evidence, and ask the *same* reviewer to reconsider; if the disagreement stays material, spawn one fresh adjudicator for that single finding (read-only, evidence-based verdict). A finding stays unresolved until fixed, withdrawn, or adjudicated invalid:
+**4. Triage findings** as review comments, not orders. Fix all concrete actionable ones as one coherent batch. Reject a finding only with repository/validation evidence, and ask the *same* reviewer to reconsider; if the disagreement stays material, spawn one fresh adjudicator for that single finding (read-only, evidence-based verdict). A finding stays unresolved until fixed, withdrawn, or adjudicated invalid — an unusable reviewer or adjudicator never resolves one. Ask each once for what it left out; if a reviewer is still unusable, replace it with one fresh reviewer, and if that review or an adjudicator's verdict is still unusable, stop **incomplete** with that finding as the blocker.
 
 ```bash
 python3 scripts/loop_review.py resolve --fixed 2 --withdrawn 1
@@ -112,6 +114,7 @@ python3 scripts/loop_review.py project close         # records accepted / review
 
 Reviewers apply these; you use them when triaging. Full detail in `references/review-dimensions.md` — read it if a finding is disputed or you're unsure whether something is actionable.
 
+- **Requirement conformance** — does the change do what the brief required? An unmet, partly met, or excluded-by-the-brief requirement is a finding. Silent when no brief was recorded; never invent one.
 - **Comprehensibility / change safety** — can a future maintainer reconstruct responsibility, flow, invariants and failure behaviour from the code? A finding needs a specific symbol/flow and a concrete maintenance scenario it endangers.
 - **Correctness & operational risk** — regressions, invalid assumptions, security/privacy exposure, data integrity, failure handling.
 - **Test evidence** — tests exercise the changed behaviour, would fail on plausible regression, assert an observable contract, mock only at real boundaries. Passing ≠ good.
@@ -122,7 +125,7 @@ Reviewers apply these; you use them when triaging. Full detail in `references/re
 
 - What changed and why.
 - Acceptance signal: findings resolved, understanding confirmed, test evidence status, validation green.
-- Passes used; outcome (accepted / incomplete / interrupted).
+- Passes used; outcome (accepted / no-changes / incomplete / interrupted).
 - Latest score as progress signal (mark "pre-adjudication" if a later adjudication invalidated a finding).
 - Validation commands + results; test quality score if tests changed.
 - Findings intentionally not changed, with reason. Remaining risks.
