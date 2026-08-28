@@ -591,21 +591,61 @@ def save_project(p):
         json.dump(p, f, indent=2)
 
 
-def area_slug(path):
-    return path.strip("/").replace("/", "__") or "root"
+def area_paths(x):
+    # Ledgers written before multi-path areas store a single "path" string.
+    return x["paths"] if "paths" in x else [x["path"]]
+
+
+def area_name(x):
+    return " + ".join(area_paths(x))
+
+
+def area_slug(x):
+    return "__".join(p.strip("/").replace("/", "__") for p in area_paths(x)) or "root"
+
+
+def parse_areas(raw, root):
+    """`--` paths form areas; a standalone `+` glues neighbours into one multi-path area.
+
+    `a b + c d` -> [a], [b, c], [d]. A flat package split across files, or sibling edge
+    functions grouped by meaning, are one area even though they are several paths.
+    """
+    areas, cur = [], []
+    for tok in raw:
+        if tok == "+":
+            if not cur:
+                die("`+` must follow a path")
+            continue_last = True
+        else:
+            continue_last = bool(cur) and prev == "+"
+            if not continue_last and cur:
+                areas.append(cur)
+                cur = []
+            cur.append(to_repo_relative(tok, root))
+        prev = tok
+    if cur:
+        areas.append(cur)
+    out, seen = [], set()
+    for area in areas:
+        key = tuple(dict.fromkeys(area))
+        if key not in seen:
+            seen.add(key)
+            out.append(list(key))
+    return out
 
 
 def cmd_project_init(a):
-    """Queue a whole-project review as one area loop per path, in order.
+    """Queue a whole-project review, one loop per area, in order.
 
-    The five-pass limit is per area, not per project: a project is finished when every
-    area has an outcome, however many loops that takes. Areas are decided by the agent
-    from the repository structure — the script only keeps the ledger.
+    An area is one or more paths one reviewer reads as a whole: `-- a b + c d` queues
+    [a], [b, c], [d]. The five-pass limit is per area, not per project: a project is
+    finished when every area has an outcome, however many loops that takes. Areas are
+    decided by the agent from the repository structure — the script only keeps the ledger.
     """
     if not a.paths:
         die("project init needs at least one area path after `--`")
     root = repo_root()
-    areas = list(dict.fromkeys(to_repo_relative(p, root) for p in a.paths))
+    areas = parse_areas(a.paths, root)
     os.chdir(root)
     if os.path.exists(PROJECT_FILE) and not a.force:
         die("project review already active; `project status` to continue it, or --force to start over")
@@ -615,13 +655,13 @@ def cmd_project_init(a):
         "created": now(),
         "max_passes": a.max_passes,
         "report_only": bool(a.report_only),
-        "areas": [{"path": x, "status": "pending"} for x in areas],
+        "areas": [{"paths": x, "status": "pending"} for x in areas],
     }
     save_project(p)
     print(f"project review queued: {len(areas)} area(s), {a.max_passes} passes each, "
           + ("report-only (no fixes)" if a.report_only else "fix mode"))
     for x in areas:
-        print(f"  - {x}")
+        print(f"  - {' + '.join(x)}")
 
 
 def cmd_project_next(a):
@@ -631,7 +671,7 @@ def cmd_project_next(a):
         die("an area loop is still open; `project close` it before moving on")
     cur = next((x for x in p["areas"] if x["status"] == "in_progress"), None)
     if cur:
-        die(f"area `{cur['path']}` is in_progress but has no state; `project close` it or `project init --force`")
+        die(f"area `{area_name(cur)}` is in_progress but has no state; `project close` it or `project init --force`")
     nxt = next((x for x in p["areas"] if x["status"] == "pending"), None)
     if nxt is None:
         print("no pending areas — project review complete; `project status` for the ledger")
@@ -640,14 +680,14 @@ def cmd_project_next(a):
     nxt["started"] = now()
     save_project(p)
     state = {
-        "created": now(), "mode": "project", "base": None, "scope": [nxt["path"]],
+        "created": now(), "mode": "project", "base": None, "scope": area_paths(nxt),
         "max_passes": p["max_passes"], "passes": [], "validation": [],
     }
     state["fingerprint_current"] = fp_of(state)
     save(state)
     done = sum(1 for x in p["areas"] if x["status"] not in ("pending", "in_progress"))
-    print(f"area {done + 1}/{len(p['areas'])}: {nxt['path']}  (fingerprint {state['fingerprint_current']})")
-    print(f"findings file: {os.path.join(FINDINGS_DIR, area_slug(nxt['path']) + '.md')}")
+    print(f"area {done + 1}/{len(p['areas'])}: {area_name(nxt)}  (fingerprint {state['fingerprint_current']})")
+    print(f"findings file: {os.path.join(FINDINGS_DIR, area_slug(nxt) + '.md')}")
     if p["report_only"]:
         print("report-only: record the pass, write the findings file, then `project close` — do not fix")
 
@@ -675,12 +715,12 @@ def cmd_project_close(a):
         cur.update({"status": "incomplete", "blockers": ["loop state lost mid-area"], "closed": now(),
                     "passes": None, "findings": None, "resolved": None, "score": None, "findings_file": None})
         save_project(p)
-        print(f"area `{cur['path']}` closed: incomplete — loop state lost")
+        print(f"area `{area_name(cur)}` closed: incomplete — loop state lost")
         return
     state = load()
     state["fingerprint_current"] = fp_of(state)
     lp = last_pass(state)
-    ffile = os.path.join(FINDINGS_DIR, area_slug(cur["path"]) + ".md")
+    ffile = os.path.join(FINDINGS_DIR, area_slug(cur) + ".md")
     r = lp.get("result") if lp else None
     if p["report_only"]:
         problems = []
@@ -712,7 +752,7 @@ def cmd_project_close(a):
     cur["findings_file"] = ffile if os.path.exists(ffile) else None
     save_project(p)
     os.remove(STATE_FILE)
-    print(f"area `{cur['path']}` closed: {cur['status']}"
+    print(f"area `{area_name(cur)}` closed: {cur['status']}"
           + (f" — {'; '.join(cur['blockers'])}" if cur["blockers"] else ""))
     left = sum(1 for x in p["areas"] if x["status"] == "pending")
     print(f"{left} area(s) pending" if left else "all areas closed — `project status` for the ledger")
@@ -730,7 +770,7 @@ def cmd_project_status(a):
     print("project review: " + ("report-only" if p["report_only"] else "fix mode")
           + f", {p['max_passes']} passes/area — " + ", ".join(f"{k} {v}" for k, v in counts.items()))
     for x in p["areas"]:
-        line = f"  [{x['status']:<11}] {x['path']}"
+        line = f"  [{x['status']:<11}] {area_name(x)}"
         if x.get("passes") is not None:
             line += f"  passes {x['passes']}  findings {x.get('resolved')}/{x.get('findings')}  score {x.get('score')}"
         if x.get("blockers"):
