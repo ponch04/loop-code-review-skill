@@ -4,7 +4,7 @@ Read this when triaging a finding you're unsure about, or when a reviewer's find
 
 ## Requirement conformance
 
-Only when a task brief was recorded (`init --task-brief`). The reviewer checks the change against what the task had to achieve, not only against itself — an implementation can be flawless and still not do the job.
+Only when a task brief was recorded (`init --task-brief`, or `brief --task-brief` later). The reviewer checks the change against what the task had to achieve, not only against itself — an implementation can be flawless and still not do the job.
 
 - Actionable: "The brief requires retries to stop after 30s total; `client.ts:88` caps attempts at 5 with no wall-clock bound, so a slow endpoint retries for minutes." Names the requirement and the observed behaviour.
 - Not actionable: a requirement the brief does not contain. A reviewer that invents acceptance criteria is reviewing a different task; withdraw it and say so.

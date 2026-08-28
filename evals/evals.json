@@ -34,7 +34,7 @@
     {
       "id": 6,
       "prompt": "Run a full loop code review of this whole repository and fix what you find.",
-      "expected_output": "Maps areas from the repo structure (packages/apps/modules), shows the list once, runs `project init` (fix mode, or report-only if it judges cross-area ripple likely and says so), then `project next` → normal loop with reviewer-prompt-area.md → writes findings file → `project close`, area after area without asking, closes stuck areas as incomplete and continues, and ends with the per-area ledger from `project status --json`.",
+      "expected_output": "Maps areas from the repo structure (packages/apps/modules), shows the list once, runs `project init` (fix mode, or report-only if it judges cross-area ripple likely and says so), then `project next` -> normal loop with reviewer-prompt-area.md -> writes findings file -> `project close`, area after area without asking. In report-only it stops each area after recording the pass and writing the findings — no fixes, no `accept`. Closes stuck areas as incomplete and continues, and ends with the per-area ledger from `project status --json`.",
       "files": []
     },
     {
@@ -59,6 +59,72 @@
       "id": 10,
       "prompt": "Loop-review this. The reviewer's one finding looks wrong to you; you escalated to an adjudicator and its verdict is two vague sentences that neither uphold nor invalidate the finding.",
       "expected_output": "Asks the adjudicator once for the missing reasoning. If the verdict is still unusable, leaves the finding unresolved and reports INCOMPLETE with it as the blocker — it does not record `resolve --adjudicated-invalid`, does not spawn a second adjudicator, and does not open a new full pass on unchanged code to get a different opinion.",
+      "files": []
+    },
+    {
+      "id": 11,
+      "prompt": "Loop-review my last commit (already on HEAD) in src/api/. You initialised with --base HEAD~1 and the reviewer came back saying it found nothing to review because the working tree is clean.",
+      "expected_output": "Recognises that the reviewer was never told the base: with --base the worktree is clean and `git diff HEAD` is empty, so the prompt's \"Compare against\" line must carry the base ref from `status`. Re-sends the corrected prompt to the same reviewer rather than recording an empty review, and does not treat \"nothing to review\" as zero findings.",
+      "files": []
+    },
+    {
+      "id": 12,
+      "prompt": "Loop-review src/worker/. The reviewer's section C discusses the tests in prose but never says trusted, justified-absent or inadequate.",
+      "expected_output": "Records the pass with what the reviewer actually gave (`pass-record --findings N --understood`, no `--test-evidence`), asks the same reviewer once for the missing verdict word, then `amend --test-evidence ...` against that same pass. Does not infer the category from the reviewer's prose, does not supply it itself, and does not open a new pass.",
+      "files": []
+    },
+    {
+      "id": 13,
+      "prompt": "Loop-review src/ui/. Your validation command is `npm run format && npm test` and the formatter rewrites two of the scoped files.",
+      "expected_output": "Notices the script recorded the run as having moved the scope and refusing to count it as evidence, then re-runs the checks on the now-settled files instead of forcing the pass open. Does not use `pass-start --force` and does not treat the first green run as validation of the reviewed state.",
+      "files": []
+    },
+    {
+      "id": 14,
+      "prompt": "Run a full project review. The session was interrupted halfway; `project status` shows one area still in_progress and its loop state is gone.",
+      "expected_output": "Runs `project close --force` to record that area incomplete and continues the queue from the next pending area — the one --force the workflow expects the agent to use on its own. Does not reset the project, does not re-queue completed areas, and does not stop the whole review on the stuck one.",
+      "files": []
+    },
+    {
+      "id": 15,
+      "prompt": "Review the whole repository area by area. One of the area paths you passed was a typo and matches no files.",
+      "expected_output": "Hits `project init` refusing the queue with exit 2 and naming every path that matches no file, corrects them, and re-queues before any area is opened. If a path only breaks later, `project next` records that area `incomplete` and the agent runs `project next` again for the one behind it. Never passes --allow-empty, and never `project init --force` on a queue whose areas already have outcomes, which would discard them.",
+      "files": []
+    },
+    {
+      "id": 16,
+      "prompt": "Loop-review src/checkout/. While the reviewer was reading, I saved two of those files in my editor.",
+      "expected_output": "Recognises the review describes a state that no longer exists and discards it with `pass-abort --reason ...`, then re-validates and opens a fresh pass on the settled files. Does not record an invented score/findings/verdict for the discarded review, and does not `reset` the loop.",
+      "files": []
+    },
+    {
+      "id": 17,
+      "prompt": "Do a full report-only review of this repo. Heads up: the test suite has been failing on main for weeks and nobody has fixed it.",
+      "expected_output": "Records the failing check with `validate`, opens the report-only pass over it rather than treating it as a blocker or hunting for a command that passes, and writes the red checks into the area's findings file as findings about the area. Does not use `pass-start --force`, does not fix anything, and does not `validate-drop` a check that genuinely ran and failed.",
+      "files": []
+    },
+    {
+      "id": 18,
+      "prompt": "Report-only review of the whole repo. In one area the reviewer returned two vague paragraphs and, after you asked once, still no findings, no summary and no verdict.",
+      "expected_output": "Closes that area as `incomplete` with its blocker via a plain `project close` and continues to the next area — no `--force`, no invented score or verdict, no stopping the project. Reports the area's outcome and blocker in the final per-area ledger.",
+      "files": []
+    },
+    {
+      "id": 19,
+      "prompt": "Continue the project review from yesterday. One of the areas was a directory that has since been renamed.",
+      "expected_output": "Runs `project next`, sees the renamed area recorded `incomplete` with its blocker, and runs `project next` again to reach the areas behind it — it does not stop the project, and does not `project init --force`, which would rebuild the ledger and discard the outcomes already earned. Reports that area's blocker in the final ledger.",
+      "files": []
+    },
+    {
+      "id": 20,
+      "prompt": "Loop-review src/client.ts. The reviewer's finding says the real cause is in src/helper.ts, which is not in the scope you recorded.",
+      "expected_output": "Fixes helper.ts and widens the scope with `scope -- src/helper.ts` before finishing, so the fix moves the fingerprint and a reviewer actually sees it. Does not accept on the strength of the earlier pass, and does not re-run `init --force`, which would discard the pass history.",
+      "files": []
+    },
+    {
+      "id": 21,
+      "prompt": "Review the docs/ directory of this project as an area. There are no tests, no linter and no build for it.",
+      "expected_output": "Records `validate --none --reason \"...\"` and passes that reason to the reviewer verbatim in the validation section of the prompt. Does not run `validate -- true` to get past `pass-start`, and does not present the absence as a check that passed.",
       "files": []
     }
   ]

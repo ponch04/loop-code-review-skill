@@ -1,6 +1,6 @@
 # Reviewer prompt template
 
-Fill the `<...>` fields from `loop_review.py status` and send this — and nothing else — to a fresh sub-agent. Do not add your own rationale, suspected issues, proposed fixes, or earlier reviewer output.
+Fill the `<...>` fields and send this — and nothing else — to a fresh sub-agent. `status` supplies the mode line, the base, the scope paths, the task brief and the validation commands verbatim. The scope-note field comes from the ownership decision you made at step 0; `status` echoes it, so it is copied, not recalled, and cannot drift between passes. It is not a requirement and must never be folded into the brief, which is graded as requirement conformance. Do not add your own rationale, suspected issues, proposed fixes, or earlier reviewer output.
 
 The task brief is the one exception, and only in the form `status` prints it: requirements and acceptance criteria are facts about what the task had to achieve, not reasoning about how you achieved it. Without them a reviewer can only check that the implementation is internally consistent — it cannot tell you a requirement was missed. Copy the brief verbatim; never widen it into an explanation of your design.
 
@@ -8,20 +8,20 @@ The task brief is the one exception, and only in the form `status` prints it: re
 You are an independent code reviewer. Repository: <absolute path>.
 You have no prior conversation history. Derive every conclusion from the repository state and command output you inspect yourself. Stay read-only: do not edit, stage, commit, reset, stash or push.
 
-Review ONLY these task-owned changes (the worktree may contain unrelated work; ignore it unless the scoped changes depend on it or make it worse):
+Review ONLY these task-owned changes (the worktree may contain unrelated work; ignore it unless the scoped changes depend on it or make it worse). `.loop-review/` is this review loop's own bookkeeping — never read it, never report on it:
 - Files / untracked files: <paths>
-- Mixed-file hunks to include: <describe, or "none">
-- Excluded unrelated changes: <paths, or "none">
+- Scope notes — which hunks of a scoped file are task-owned, and what in it is not: <the `scope note` from `status`, verbatim, or "none: every change in the listed files is task-owned">
+- Compare against: <"the working tree against HEAD" when `status` shows no base. When it shows one, paste that commit id — never `HEAD~1` or any other relative form, which names a different commit after any later commit and would show the reviewer a narrower change than the gates cover: "commit 4940158a3af3… — the task is already committed, so `git status` is clean and `git diff HEAD` is empty; review `git diff 4940158a3af3 -- <paths>`". In a repository with no commits there is no HEAD: say "the repository has no commits — every listed file is new; read them in full". Untracked files appear in no diff, so whenever the scope holds one, name it here too: "these files are new and untracked — read them in full, they have no diff">
 
 Task brief — what the change had to achieve, requirements and acceptance criteria:
 <verbatim from `status`, or "none recorded">
 
 Validation already run by the author (you may re-run):
-- <command> -> <exit code>
+- <command> -> <exit code>, one line each, exactly as `status` prints them. If `status` shows "no executable check applies: <reason>", write that sentence instead — it is not a check that passed, and nothing was run.
 
 Treat this as a handoff to a future maintainer.
 
-1. Understand first. Reconstruct what the change does, its main control/data flow, the invariants it relies on, its failure behaviour, and the reason for any non-obvious decision. Inspect `git status --short`, the scoped diffs, and neighbouring code as needed. If after reasonable inspection you cannot explain a part, that is itself a finding: name the exact symbol or flow, what is unclear, and a concrete future change or diagnosis it makes risky. Unfamiliar domain logic is not poor maintainability.
+1. Understand first. Reconstruct what the change does, its main control/data flow, the invariants it relies on, its failure behaviour, and the reason for any non-obvious decision. Take the diff from the "Compare against" line above — when it names a base ref, the work is already committed, so `git status` is clean and only `git diff <base> -- <paths>` shows the change. Inspect neighbouring code as needed. If after reasonable inspection you cannot explain a part, that is itself a finding: name the exact symbol or flow, what is unclear, and a concrete future change or diagnosis it makes risky. Unfamiliar domain logic is not poor maintainability.
 
 2. Then check the change against the task brief before anything else: a requirement that is unmet, only partially met, or met in a way the brief excludes is a finding, stated as the requirement and the observed behaviour. Judge whether the change does the job, not merely whether its implementation is internally consistent. If the brief says "none recorded", review the change on its own terms and do not invent requirements for it.
 
@@ -32,7 +32,7 @@ Treat this as a handoff to a future maintainer.
 Return, in this order:
 A. Findings, ordered by severity, each with file:line, what is wrong, and the user or maintenance impact. If there are none, say "No actionable findings" explicitly.
 B. Understanding summary: 3–8 sentences explaining the changed responsibility and important flow.
-C. Test evidence assessment (and test quality score if applicable).
+C. Test evidence assessment (and test quality score if applicable), ending with exactly one verdict word: `trusted` (the tests exercise the changed behaviour and would fail on a plausible regression), `justified-absent` (no adequate evidence, but a concrete reason for its absence that you accept), or `inadequate` (neither). The verdict is yours to state, not the author's to infer from your prose.
 D. Overall score 1–10, derived only after A–C. Anchors: 10 = understandable, no known in-scope defects, brief satisfied, validation complete and green; 9.5–9.9 = no actionable findings, only optional nits or merely sufficient evidence; 8–9.4 = limited actionable findings or evidence gaps; below 8 = substantial risk, an unmet requirement, or red validation. Never create, keep, or upgrade a finding to justify a score.
 ```
 
