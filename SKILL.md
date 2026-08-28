@@ -88,8 +88,10 @@ A project is too large for one reviewer to hold; "review everything" means a **q
 **P0. Map the areas.** Derive them from the repository structure — packages, apps, services, top-level modules — not from `git status`. Aim for areas a single reviewer can actually read (a few thousand lines); split big packages by subdirectory. List them in dependency order where it matters (shared libs before their consumers). Show the list to the user once; then run without further questions.
 
 ```bash
-python3 scripts/loop_review.py project init --max-passes 5 [--report-only] -- <area paths in order>
+python3 scripts/loop_review.py project init --max-passes 5 [--report-only] -- <areas in order>
 ```
+
+An area is one **or several** paths one reviewer reads as a whole: a standalone `+` glues neighbouring paths into one area — `-- packages/domain apps/portal/src/lib + apps/portal/src/lib-tests fnA + fnB + fnC`. Use multi-path areas to split a flat package by file groups without tearing code away from its tests, or to group sibling edge functions by meaning.
 
 `--report-only` collects findings without fixing: use it by default for a first full review, or whenever fixes in one area could ripple into others. Without it the loop fixes each area as in task mode, and validation after each batch must cover the whole project, not just the area.
 
