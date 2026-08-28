@@ -5,8 +5,19 @@ Keeps the loop honest: tracks scope, validation, passes and findings in
 .loop-review/state.json inside the repo, and refuses to accept until the
 exit condition holds. No dependencies beyond git and Python 3.8+.
 
+Two scopes share one loop: `changes` (default) fingerprints the scoped diff against a base
+commit — the task's own edits; `project` fingerprints the *contents* of every file under the
+scoped paths — an inherited area reviewed as a whole. A project review is a queue of such
+area loops, tracked in .loop-review/project.json by the `project` commands.
+
 Commands:
-  init [--max-passes N] -- <paths...>      start a loop over task-owned paths
+  init [--max-passes N] [--mode changes|project] [--base REF] -- <paths...>
+                                           start a loop over paths (task diff or whole area)
+  project init [--max-passes N] [--report-only] -- <area paths...>
+                                           queue a whole-project review, one loop per area
+  project next                             open the loop for the next pending area
+  project close                            record the current area's outcome, free the loop
+  project status [--json]                  ledger of areas and outcomes
   validate -- <command...>                 run a validation command, record result
   validate-drop [--force] -- <command...>  retract a record for a command that never ran,
                                            or (--force) retire a check inherited from the last pass
@@ -42,42 +53,12 @@ TEST_EVIDENCE_BLOCKING = "inadequate"
 
 STATE_DIR = ".loop-review"
 STATE_FILE = os.path.join(STATE_DIR, "state.json")
+PROJECT_FILE = os.path.join(STATE_DIR, "project.json")
+FINDINGS_DIR = os.path.join(STATE_DIR, "findings")
+MODES = ("changes", "project")
 
 
 # ---------- helpers ----------
-
-def positive_int(v):
-    """argparse type: a count that must be at least 1."""
-    try:
-        n = int(v)
-    except ValueError:
-        raise argparse.ArgumentTypeError(f"{v!r} is not an integer")
-    if n < 1:
-        raise argparse.ArgumentTypeError(f"must be at least 1, got {n}")
-    return n
-
-
-def nonneg_int(v):
-    """argparse type: a count of things that happened, so never negative."""
-    try:
-        n = int(v)
-    except ValueError:
-        raise argparse.ArgumentTypeError(f"{v!r} is not an integer")
-    if n < 0:
-        raise argparse.ArgumentTypeError(f"must not be negative, got {n}")
-    return n
-
-
-def score_value(v):
-    """argparse type: the 1–10 progress signal. Range only — the score gates nothing."""
-    try:
-        f = float(v)
-    except ValueError:
-        raise argparse.ArgumentTypeError(f"{v!r} is not a number")
-    if not 1.0 <= f <= 10.0:
-        raise argparse.ArgumentTypeError(f"must be within the 1–10 anchors, got {f}")
-    return f
-
 
 def git(*args, check=True):
     """Run git and return raw stdout **bytes**.
@@ -153,12 +134,29 @@ def diff_base():
     return git_text("hash-object", "-t", "tree", os.devnull).strip()
 
 
-def fingerprint(paths):
-    """Hash of tracked diff (staged+unstaged) plus untracked file contents, scoped to paths."""
+def fingerprint(paths, mode="changes", base=None):
+    """Hash identifying the reviewed state, scoped to paths.
+
+    changes: diff of the worktree against `base` (HEAD by default) plus untracked contents —
+             the task's own edits. Empty when the work is already committed and no base is
+             given; pass `init --base <ref>` for a committed task.
+    project: contents of every tracked and untracked file under the paths. The area is
+             reviewed as it is, so its identity is its content, not a diff.
+    """
     h = hashlib.sha256()
+    if mode == "project":
+        out = git("ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", *paths)
+        for p in sorted({p for p in out.split(b"\0") if p}):
+            h.update(p)
+            try:
+                with open(p, "rb") as f:
+                    h.update(f.read())
+            except OSError as e:
+                h.update(f"<unreadable:{e.errno}>".encode())
+        return h.hexdigest()[:16]
     # check=True on both git calls: a failure here must be loud. A silently empty hash is
     # indistinguishable from "nothing changed", which is the one lie that breaks every gate.
-    h.update(git("diff", diff_base(), "--", *paths))
+    h.update(git("diff", base or diff_base(), "--", *paths))
     # -z: NUL-separated and unquoted, so paths with spaces, newlines or non-ASCII
     # characters survive intact. Splitting plain `ls-files` output would corrupt them
     # and silently drop those files from the hash.
@@ -174,6 +172,10 @@ def fingerprint(paths):
             # Fold the failure in: an unreadable file must not hash like an empty one.
             h.update(f"<unreadable:{e.errno}>".encode())
     return h.hexdigest()[:16]
+
+
+def fp_of(state):
+    return fingerprint(state["scope"], state.get("mode", "changes"), state.get("base"))
 
 
 def now():
@@ -280,16 +282,27 @@ def cmd_init(a):
     os.chdir(root)
     if os.path.exists(STATE_FILE) and not a.force:
         die("loop already active; use `reset` or `--force`")
+    if a.base:
+        if a.mode == "project":
+            die("--base applies to --mode changes only")
+        if not git("rev-parse", "--verify", "--quiet", a.base + "^{commit}", check=False).strip():
+            die(f"--base {a.base} is not a commit in this repository")
     state = {
         "created": now(),
+        "mode": a.mode,
+        "base": a.base,
         "scope": scope,
         "max_passes": a.max_passes,
         "passes": [],
         "validation": [],
-        "fingerprint_current": fingerprint(scope),
     }
+    state["fingerprint_current"] = fp_of(state)
+    if a.mode == "changes" and state["fingerprint_current"] == fingerprint([], "changes"):
+        print("warning: the scoped diff is empty — if the task is already committed, re-run with "
+              "--base <ref> (e.g. the parent of the first task commit); otherwise every gate is blind",
+              file=sys.stderr)
     save(state)
-    print(f"loop initialised: {len(scope)} path(s), max {a.max_passes} passes, fingerprint {state['fingerprint_current']}")
+    print(f"loop initialised ({a.mode}{' vs ' + a.base if a.base else ''}): {len(scope)} path(s), max {a.max_passes} passes, fingerprint {state['fingerprint_current']}")
     for p in scope:
         print(f"  - {p}")
 
@@ -308,7 +321,7 @@ def cmd_validate(a):
     cmd = join_cmd(a.command)
     print(f"$ {cmd}", flush=True)
     r = subprocess.run(cmd, shell=True)
-    state["fingerprint_current"] = fingerprint(state["scope"])
+    state["fingerprint_current"] = fp_of(state)
     state["validation"].append({"cmd": cmd, "exit": r.returncode, "at": now(), "fingerprint": state["fingerprint_current"]})
     save(state)
     print(f"loop-review: validation {'GREEN' if r.returncode == 0 else 'RED'} (exit {r.returncode})")
@@ -329,7 +342,7 @@ def cmd_validate_drop(a):
     if not a.command:
         die("validate-drop needs a command after `--`")
     cmd = join_cmd(a.command)
-    state["fingerprint_current"] = fingerprint(state["scope"])
+    state["fingerprint_current"] = fp_of(state)
     hits = [v for v in state["validation"]
             if v["cmd"] == cmd and v["fingerprint"] == state["fingerprint_current"] and not v.get("retracted")]
     lp = last_pass(state)
@@ -374,7 +387,7 @@ def cmd_validate_drop(a):
 def cmd_pass_start(a):
     os.chdir(repo_root())
     state = load()
-    state["fingerprint_current"] = fingerprint(state["scope"])
+    state["fingerprint_current"] = fp_of(state)
     lp = last_pass(state)
     if lp and lp.get("result") is None:
         die(f"pass {lp['n']} is still open; record it first")
@@ -413,6 +426,10 @@ def cmd_pass_record(a):
         die("no open pass to record")
     if lp.get("result") is not None:
         die(f"pass {lp['n']} is already recorded; use `amend` to add output the reviewer supplied afterwards")
+    if a.findings < 0:
+        # `unresolved = findings - resolved` feeds blockers(); a negative count would read
+        # as "already resolved" and pass exit condition 2 without a single fix.
+        die(f"--findings must not be negative ({a.findings}); it counts findings the reviewer reported")
     lp["result"] = {
         "score": a.score,
         "findings": a.findings,
@@ -454,12 +471,14 @@ def cmd_amend(a):
         given["understood"] = True
     if not given:
         die("amend needs at least one of --understood / --test-evidence / --score / --findings / --test-score / --note")
+    if "findings" in given and given["findings"] < 0:
+        die(f"--findings must not be negative ({given['findings']})")
     if "findings" in given and given["findings"] < r["findings"]:
         die(f"amend cannot lower findings ({r['findings']} -> {given['findings']}); "
             "record a fix, withdrawal or adjudication with `resolve` instead")
     r.update(given)
     r.setdefault("amendments", []).append({**given, "at": now()})
-    state["fingerprint_current"] = fingerprint(state["scope"])
+    state["fingerprint_current"] = fp_of(state)
     save(state)
     print(f"pass {lp['n']} amended: " + ", ".join(f"{k}={v}" for k, v in given.items()))
     print(f"pass {lp['n']}: score {r['score']}, {r['resolved']}/{r['findings']} resolved, understood={r['understood']}, test evidence {r.get('test_evidence')}")
@@ -473,8 +492,12 @@ def cmd_resolve(a):
     lp = last_pass(state)
     if lp is None or lp.get("result") is None:
         die("no recorded pass to resolve against")
-    # Counts are non-negative by argument type; a call that reports nothing is still a
-    # no-op that would land in the log as a resolution step.
+    counts = (("--fixed", a.fixed), ("--withdrawn", a.withdrawn), ("--adjudicated-invalid", a.adjudicated_invalid))
+    # Each flag counts something that happened, so it cannot be negative, and a call that
+    # reports nothing is a no-op that would still land in the log as a resolution step.
+    for name, value in counts:
+        if value < 0:
+            die(f"{name} must not be negative ({value}); it counts resolutions that happened")
     total = a.fixed + a.withdrawn + a.adjudicated_invalid
     if total == 0:
         die("resolve needs at least one of --fixed / --withdrawn / --adjudicated-invalid")
@@ -482,7 +505,7 @@ def cmd_resolve(a):
     claimed = r["resolved"] + total
     r["resolved"] = min(r["findings"], claimed)
     r.setdefault("resolution_log", []).append({"fixed": a.fixed, "withdrawn": a.withdrawn, "adjudicated_invalid": a.adjudicated_invalid, "at": now()})
-    state["fingerprint_current"] = fingerprint(state["scope"])
+    state["fingerprint_current"] = fp_of(state)
     save(state)
     print(f"pass {lp['n']}: {r['resolved']}/{r['findings']} resolved")
     if claimed > r["findings"]:
@@ -495,7 +518,7 @@ def cmd_resolve(a):
 def cmd_accept(a):
     os.chdir(repo_root())
     state = load()
-    state["fingerprint_current"] = fingerprint(state["scope"])
+    state["fingerprint_current"] = fp_of(state)
     save(state)
     reasons = blockers(state)
     lp = last_pass(state)
@@ -512,11 +535,12 @@ def cmd_accept(a):
 def cmd_status(a):
     os.chdir(repo_root())
     state = load()
-    state["fingerprint_current"] = fingerprint(state["scope"])
+    state["fingerprint_current"] = fp_of(state)
     state["blockers"] = blockers(state)
     if a.json:
         print(json.dumps(state, indent=2))
         return
+    print(f"mode: {state.get('mode', 'changes')}" + (f" vs {state['base']}" if state.get("base") else ""))
     print(f"scope ({len(state['scope'])}): " + ", ".join(state["scope"]))
     print(f"passes: {len(state['passes'])}/{state['max_passes']}")
     for p in state["passes"]:
@@ -543,9 +567,175 @@ def cmd_reset(a):
     except OSError:
         # Empty-only by design: rmdir refuses a non-empty directory, and the script has no
         # business deleting anything a user put in there. Missing directory is fine too.
-        if os.path.isdir(STATE_DIR):
+        ours = {os.path.basename(PROJECT_FILE), os.path.basename(FINDINGS_DIR)}
+        if os.path.isdir(STATE_DIR) and not set(os.listdir(STATE_DIR)) <= ours:
             print(f"note: {STATE_DIR}/ kept — it holds files this script did not create")
     print("state cleared")
+
+
+# ---------- project mode ----------
+
+def load_project():
+    if not os.path.exists(PROJECT_FILE):
+        die("no project review; run `project init` first")
+    with open(PROJECT_FILE) as f:
+        try:
+            return json.load(f)
+        except ValueError as e:
+            die(f"{PROJECT_FILE} is not valid JSON ({e})")
+
+
+def save_project(p):
+    os.makedirs(STATE_DIR, exist_ok=True)
+    with open(PROJECT_FILE, "w") as f:
+        json.dump(p, f, indent=2)
+
+
+def area_slug(path):
+    return path.strip("/").replace("/", "__") or "root"
+
+
+def cmd_project_init(a):
+    """Queue a whole-project review as one area loop per path, in order.
+
+    The five-pass limit is per area, not per project: a project is finished when every
+    area has an outcome, however many loops that takes. Areas are decided by the agent
+    from the repository structure — the script only keeps the ledger.
+    """
+    if not a.paths:
+        die("project init needs at least one area path after `--`")
+    root = repo_root()
+    areas = list(dict.fromkeys(to_repo_relative(p, root) for p in a.paths))
+    os.chdir(root)
+    if os.path.exists(PROJECT_FILE) and not a.force:
+        die("project review already active; `project status` to continue it, or --force to start over")
+    if os.path.exists(STATE_FILE):
+        die("an area loop is still open (state.json); `project close` or `reset` it first")
+    p = {
+        "created": now(),
+        "max_passes": a.max_passes,
+        "report_only": bool(a.report_only),
+        "areas": [{"path": x, "status": "pending"} for x in areas],
+    }
+    save_project(p)
+    print(f"project review queued: {len(areas)} area(s), {a.max_passes} passes each, "
+          + ("report-only (no fixes)" if a.report_only else "fix mode"))
+    for x in areas:
+        print(f"  - {x}")
+
+
+def cmd_project_next(a):
+    os.chdir(repo_root())
+    p = load_project()
+    if os.path.exists(STATE_FILE):
+        die("an area loop is still open; `project close` it before moving on")
+    cur = next((x for x in p["areas"] if x["status"] == "in_progress"), None)
+    if cur:
+        die(f"area `{cur['path']}` is in_progress but has no state; `project close` it or `project init --force`")
+    nxt = next((x for x in p["areas"] if x["status"] == "pending"), None)
+    if nxt is None:
+        print("no pending areas — project review complete; `project status` for the ledger")
+        return
+    nxt["status"] = "in_progress"
+    nxt["started"] = now()
+    save_project(p)
+    state = {
+        "created": now(), "mode": "project", "base": None, "scope": [nxt["path"]],
+        "max_passes": p["max_passes"], "passes": [], "validation": [],
+    }
+    state["fingerprint_current"] = fp_of(state)
+    save(state)
+    done = sum(1 for x in p["areas"] if x["status"] not in ("pending", "in_progress"))
+    print(f"area {done + 1}/{len(p['areas'])}: {nxt['path']}  (fingerprint {state['fingerprint_current']})")
+    print(f"findings file: {os.path.join(FINDINGS_DIR, area_slug(nxt['path']) + '.md')}")
+    if p["report_only"]:
+        print("report-only: record the pass, write the findings file, then `project close` — do not fix")
+
+
+def cmd_project_close(a):
+    """Record the outcome of the current area from the loop state, then free the loop.
+
+    fix mode:    accepted when blockers() is empty, else incomplete with the blockers.
+    report-only: reviewed when a pass is recorded with a credible understanding and its
+                 findings (if any) are written to the findings file; the loop's own
+                 acceptance is not required because nothing is meant to be fixed.
+    """
+    os.chdir(repo_root())
+    p = load_project()
+    cur = next((x for x in p["areas"] if x["status"] == "in_progress"), None)
+    if cur is None:
+        die("no area in progress")
+    if not os.path.exists(STATE_FILE):
+        # The loop state vanished mid-area (crash, manual reset). The area cannot be judged;
+        # with --force it is closed as incomplete so the queue can move on and it stays
+        # visible in the ledger for a re-run.
+        if not a.force:
+            die("no loop state for the current area — it was lost mid-loop; "
+                "`project close --force` marks it incomplete and continues the queue")
+        cur.update({"status": "incomplete", "blockers": ["loop state lost mid-area"], "closed": now(),
+                    "passes": None, "findings": None, "resolved": None, "score": None, "findings_file": None})
+        save_project(p)
+        print(f"area `{cur['path']}` closed: incomplete — loop state lost")
+        return
+    state = load()
+    state["fingerprint_current"] = fp_of(state)
+    lp = last_pass(state)
+    ffile = os.path.join(FINDINGS_DIR, area_slug(cur["path"]) + ".md")
+    r = lp.get("result") if lp else None
+    if p["report_only"]:
+        problems = []
+        if r is None:
+            problems.append("no recorded pass")
+        else:
+            if not r["understood"]:
+                problems.append("reviewer did not demonstrate a credible understanding")
+            if r["findings"] > 0 and not os.path.exists(ffile):
+                problems.append(f"{r['findings']} finding(s) reported but {ffile} is missing")
+        if problems and not a.force:
+            die("cannot close area: " + "; ".join(problems) + " (--force to close as incomplete)")
+        cur["status"] = "reviewed" if not problems else "incomplete"
+        cur["blockers"] = problems
+    else:
+        reasons = blockers(state)
+        cur["status"] = "accepted" if not reasons else "incomplete"
+        cur["blockers"] = reasons
+        if r and r["findings"] - r["resolved"] > 0 and not os.path.exists(ffile):
+            print(f"note: unresolved findings but no {ffile} — write it so the ledger stays readable")
+    cur["closed"] = now()
+    cur["passes"] = len(state["passes"])
+    # Totals across every pass of this area: a fixed finding from pass 1 is part of the
+    # area's story even though pass 2 reports zero.
+    recorded = [x["result"] for x in state["passes"] if x.get("result")]
+    cur["findings"] = sum(x["findings"] for x in recorded) if recorded else None
+    cur["resolved"] = sum(x["resolved"] for x in recorded) if recorded else None
+    cur["score"] = r["score"] if r else None
+    cur["findings_file"] = ffile if os.path.exists(ffile) else None
+    save_project(p)
+    os.remove(STATE_FILE)
+    print(f"area `{cur['path']}` closed: {cur['status']}"
+          + (f" — {'; '.join(cur['blockers'])}" if cur["blockers"] else ""))
+    left = sum(1 for x in p["areas"] if x["status"] == "pending")
+    print(f"{left} area(s) pending" if left else "all areas closed — `project status` for the ledger")
+
+
+def cmd_project_status(a):
+    os.chdir(repo_root())
+    p = load_project()
+    if a.json:
+        print(json.dumps(p, indent=2))
+        return
+    counts = {}
+    for x in p["areas"]:
+        counts[x["status"]] = counts.get(x["status"], 0) + 1
+    print("project review: " + ("report-only" if p["report_only"] else "fix mode")
+          + f", {p['max_passes']} passes/area — " + ", ".join(f"{k} {v}" for k, v in counts.items()))
+    for x in p["areas"]:
+        line = f"  [{x['status']:<11}] {x['path']}"
+        if x.get("passes") is not None:
+            line += f"  passes {x['passes']}  findings {x.get('resolved')}/{x.get('findings')}  score {x.get('score')}"
+        if x.get("blockers"):
+            line += "  — " + "; ".join(x["blockers"])
+        print(line)
 
 
 # ---------- main ----------
@@ -554,17 +744,23 @@ def main():
     p = argparse.ArgumentParser(prog="loop_review.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    s = sub.add_parser("init"); s.add_argument("--max-passes", type=positive_int, default=5); s.add_argument("--force", action="store_true"); s.add_argument("paths", nargs="*"); s.set_defaults(fn=cmd_init)
+    s = sub.add_parser("init"); s.add_argument("--max-passes", type=int, default=5); s.add_argument("--mode", choices=MODES, default="changes"); s.add_argument("--base", metavar="REF", help="commit to diff against (changes mode); use for already-committed work"); s.add_argument("--force", action="store_true"); s.add_argument("paths", nargs="*"); s.set_defaults(fn=cmd_init)
     s = sub.add_parser("validate"); s.add_argument("command", nargs="*"); s.set_defaults(fn=cmd_validate)
     s = sub.add_parser("validate-drop"); s.add_argument("--force", action="store_true"); s.add_argument("--reason"); s.add_argument("command", nargs="*"); s.set_defaults(fn=cmd_validate_drop)
     s = sub.add_parser("pass-start"); s.add_argument("--force", action="store_true"); s.set_defaults(fn=cmd_pass_start)
-    s = sub.add_parser("pass-record"); s.add_argument("--score", type=score_value, required=True); s.add_argument("--findings", type=nonneg_int, required=True); s.add_argument("--test-evidence", choices=TEST_EVIDENCE, required=True); s.add_argument("--understood", action="store_true"); s.add_argument("--test-score", type=score_value); s.add_argument("--note"); s.set_defaults(fn=cmd_pass_record)
-    s = sub.add_parser("amend"); s.add_argument("--understood", action="store_true"); s.add_argument("--test-evidence", choices=TEST_EVIDENCE); s.add_argument("--score", type=score_value); s.add_argument("--findings", type=nonneg_int); s.add_argument("--test-score", type=score_value); s.add_argument("--note"); s.set_defaults(fn=cmd_amend)
-    s = sub.add_parser("resolve"); s.add_argument("--fixed", type=nonneg_int, default=0); s.add_argument("--withdrawn", type=nonneg_int, default=0); s.add_argument("--adjudicated-invalid", type=nonneg_int, default=0); s.set_defaults(fn=cmd_resolve)
+    s = sub.add_parser("pass-record"); s.add_argument("--score", type=float, required=True); s.add_argument("--findings", type=int, required=True); s.add_argument("--test-evidence", choices=TEST_EVIDENCE, required=True); s.add_argument("--understood", action="store_true"); s.add_argument("--test-score", type=float); s.add_argument("--note"); s.set_defaults(fn=cmd_pass_record)
+    s = sub.add_parser("amend"); s.add_argument("--understood", action="store_true"); s.add_argument("--test-evidence", choices=TEST_EVIDENCE); s.add_argument("--score", type=float); s.add_argument("--findings", type=int); s.add_argument("--test-score", type=float); s.add_argument("--note"); s.set_defaults(fn=cmd_amend)
+    s = sub.add_parser("resolve"); s.add_argument("--fixed", type=int, default=0); s.add_argument("--withdrawn", type=int, default=0); s.add_argument("--adjudicated-invalid", type=int, default=0); s.set_defaults(fn=cmd_resolve)
     s = sub.add_parser("accept"); s.set_defaults(fn=cmd_accept)
     s = sub.add_parser("status"); s.add_argument("--json", action="store_true"); s.set_defaults(fn=cmd_status)
     s = sub.add_parser("fingerprint"); s.set_defaults(fn=cmd_fingerprint)
     s = sub.add_parser("reset"); s.set_defaults(fn=cmd_reset)
+
+    pr = sub.add_parser("project").add_subparsers(dest="pcmd", required=True)
+    s = pr.add_parser("init"); s.add_argument("--max-passes", type=int, default=5); s.add_argument("--report-only", action="store_true", help="collect findings per area without fixing"); s.add_argument("--force", action="store_true"); s.add_argument("paths", nargs="*"); s.set_defaults(fn=cmd_project_init)
+    s = pr.add_parser("next"); s.set_defaults(fn=cmd_project_next)
+    s = pr.add_parser("close"); s.add_argument("--force", action="store_true"); s.set_defaults(fn=cmd_project_close)
+    s = pr.add_parser("status"); s.add_argument("--json", action="store_true"); s.set_defaults(fn=cmd_project_status)
 
     # Paths and validation commands can carry undecodable bytes (surrogates from
     # os.fsdecode / argv). Printing them must not be the thing that kills the loop.
