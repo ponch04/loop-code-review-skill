@@ -40,7 +40,7 @@ Commands:
   accept                                   exit 0 if accepted, else 1 + reasons
   status [--json]
   fingerprint                              print hash of the scoped diff
-  reset [--project] [--force]              delete the loop state (and the project ledger)
+  reset [--project]                        delete the loop state (and the project ledger)
 """
 import argparse
 import hashlib
@@ -1067,15 +1067,16 @@ def cmd_reset(a):
     # leaves the ledger pointing at a loop whose state is gone, and the documented recovery
     # (`project close --force`) then records an area that passed every gate as `incomplete`
     # with its passes, score and verdict all null. Refuse instead of losing the outcome.
-    if os.path.exists(PROJECT_FILE) and os.path.exists(STATE_FILE) and not a.force:
+    if os.path.exists(PROJECT_FILE) and os.path.exists(STATE_FILE):
         try:
             with open(PROJECT_FILE, encoding="utf-8") as f:
                 busy = next((x for x in json.load(f)["areas"] if x["status"] == "in_progress"), None)
         except (OSError, ValueError, KeyError):
             busy = None
         if busy:
-            die(f"area `{area_name(busy)}` is mid-loop — `project close` records its outcome and "
-                "frees the loop; `reset` here would discard it (--force to insist)")
+            die(f"area `{area_name(busy)}` is mid-loop — `project close` records its outcome "
+                "and frees the loop, or `project close --force` settles it `incomplete`. "
+                "`reset` here would discard the outcome instead.")
     if a.project:
         if os.path.exists(PROJECT_FILE):
             os.remove(PROJECT_FILE)
@@ -1464,7 +1465,7 @@ def build_parser():
     s = sub.add_parser("accept"); s.set_defaults(fn=cmd_accept)
     s = sub.add_parser("status"); s.add_argument("--json", action="store_true"); s.set_defaults(fn=cmd_status)
     s = sub.add_parser("fingerprint"); s.set_defaults(fn=cmd_fingerprint)
-    s = sub.add_parser("reset"); s.add_argument("--project", action="store_true", help="also discard the project ledger"); s.add_argument("--force", action="store_true", help="reset even while a project area is mid-loop"); s.set_defaults(fn=cmd_reset)
+    s = sub.add_parser("reset"); s.add_argument("--project", action="store_true", help="also discard the project ledger"); s.set_defaults(fn=cmd_reset)
 
     pr = sub.add_parser("project").add_subparsers(dest="pcmd", required=True)
     s = pr.add_parser("init"); s.add_argument("--max-passes", type=positive_int, default=5); s.add_argument("--report-only", action="store_true", help="collect findings per area without fixing"); s.add_argument("--allow-empty", action="store_true", help="queue areas that match no file"); s.add_argument("--force", action="store_true"); s.add_argument("paths", nargs="*"); s.set_defaults(fn=cmd_project_init)

@@ -99,6 +99,21 @@ def findings(d, slug, text="A. review\nB. understood\nC. trusted\nD. 9.5\n"):
         f.write(text)
 
 
+def pass_through(d, score="9.5", findings="0", evidence="trusted", understood=True):
+    """validate + pass-start + pass-record: the opening ritual of almost every case.
+
+    Cases that are *about* one of these three call them directly; the rest only need a
+    recorded pass to exist before they can test what they are actually about.
+    """
+    run("validate", "--", "true", cwd=d)
+    run("pass-start", cwd=d, check=True)
+    args = ["pass-record", "--score", score, "--findings", findings,
+            "--test-evidence", evidence]
+    if understood:
+        args.append("--understood")
+    run(*args, cwd=d, check=True)
+
+
 def ok(cond, label):
     if not cond:
         FAILURES.append(label)
@@ -136,12 +151,7 @@ def scoped_file_alone_is_not_empty():
 
 @case
 def empty_project_area_is_refused():
-    """On the path the workflow actually uses, not only via `init --mode project`.
-
-    The gate lived only in `cmd_init` once, and this case tested it there — through a
-    command SKILL.md never tells anyone to run. `project init` queued the typo happily and
-    the area closed as `accepted` with nothing read. Test the documented path first.
-    """
+    """On the path the workflow uses (`project init`), not only via `init --mode project`."""
     d = repo({"pkg/a.py": "x\n"})
     r = run("project", "init", "--", "pkg", "does/not/exist", cwd=d)
     ok(r.returncode == 2, "project init must refuse an area matching no file")
@@ -159,10 +169,7 @@ def an_area_emptied_after_queueing_is_refused_at_open():
     d = repo({"pkg/a.py": "x\n", "gone/b.py": "y\n"})
     run("project", "init", "--", "pkg", "gone", cwd=d, check=True)
     run("project", "next", cwd=d, check=True)
-    run("validate", "--", "true", cwd=d)
-    run("pass-start", cwd=d, check=True)
-    run("pass-record", "--score", "9", "--findings", "0", "--understood",
-        "--test-evidence", "trusted", cwd=d, check=True)
+    pass_through(d, "9", "0", "trusted")
     findings(d, "pkg")
     run("project", "close", cwd=d, check=True)
     sh("git rm -q -r gone && git commit -qm drop", d)
@@ -179,10 +186,7 @@ def a_refused_area_does_not_block_the_areas_behind_it():
     d = repo({"a/x.py": "1\n", "gone/y.py": "2\n", "c/z.py": "3\n"})
     run("project", "init", "--report-only", "--", "a", "gone", "c", cwd=d, check=True)
     run("project", "next", cwd=d, check=True)
-    run("validate", "--", "true", cwd=d)
-    run("pass-start", cwd=d, check=True)
-    run("pass-record", "--score", "9.5", "--findings", "0", "--understood",
-        "--test-evidence", "trusted", cwd=d, check=True)
+    pass_through(d, "9.5", "0", "trusted")
     findings(d, "a", "clean\n")
     run("project", "close", cwd=d, check=True)
     sh("git rm -q -r gone && git commit -qm drop", d)
@@ -212,10 +216,7 @@ def a_deeply_nested_area_is_fingerprinted_by_its_tracked_files():
     ok(r.returncode == 0, f"the documented multi-path example must queue, got: {r.stderr.strip()[:160]}")
     ffile = run("project", "next", cwd=d, check=True).stdout.split(
         "findings file: ")[1].splitlines()[0]              # packages/domain
-    run("validate", "--", "true", cwd=d)
-    run("pass-start", cwd=d, check=True)
-    run("pass-record", "--score", "9.5", "--findings", "0", "--understood",
-        "--test-evidence", "trusted", cwd=d, check=True)
+    pass_through(d, "9.5", "0", "trusted")
     # This area's slug flattens `packages/domain`, which the helper cannot reconstruct from
     # the stem alone — take the path the script itself printed.
     with open(os.path.join(d, ffile), "w") as f:
@@ -287,13 +288,8 @@ def a_fix_mode_area_reviews_over_inherited_red_but_never_accepts_over_it():
 
 @case
 def a_red_check_is_labelled_inherited_or_regressed():
-    """The reviewer is told which it is, and the loop's own history decides.
-
-    Project mode opens a pass over a failing check because an inherited area is reviewed as
-    it stands — but that licence belongs to a check that was already failing. One this
-    loop's own fix batch broke is a regression in the change under review, and presenting it
-    as "a property of the area you inherited" hands a fresh reviewer the wrong conclusion.
-    """
+    """Which one it is decides what the reviewer is told, and the loop's own history
+    answers it: a check this loop broke is about the change, not the area."""
     d = repo({"pkg/a.py": "x\n", "pkg/flag": "ok\n"})
     check = "test \"$(cat pkg/flag)\" = ok"
     run("project", "init", "--", "pkg", cwd=d, check=True)
@@ -360,17 +356,14 @@ def the_documented_project_workflow_runs_as_written():
     d = repo({"pkg/a.py": "v1\n", "lib/b.py": "v1\n"})
     run("project", "init", "--max-passes", "5", "--", "lib", "pkg", cwd=d, check=True)
     run("project", "next", cwd=d, check=True)
-    run("validate", "--", "true", cwd=d)
-    run("pass-start", cwd=d, check=True)
-    run("pass-record", "--score", "9.5", "--findings", "0", "--understood",
-        "--test-evidence", "trusted", cwd=d, check=True)
+    pass_through(d, "9.5", "0", "trusted")
     ok(run("accept", cwd=d).returncode == 0, "fix mode: a clean area must accept")
     findings(d, "lib")
     run("project", "close", cwd=d, check=True)
     run("project", "next", cwd=d, check=True)
     ok(run("reset", cwd=d).returncode != 0,
        "reset inside an open area must refuse — `project close` is what frees it")
-    run("reset", "--force", cwd=d, check=True)            # simulate the session dying
+    os.remove(os.path.join(d, ".loop-review", "state.json"))   # the session dies mid-area
     ok(run("project", "next", cwd=d).returncode != 0, "a stranded area must block the queue")
     ok(run("project", "close", cwd=d).returncode != 0, "and a plain close must refuse")
     ok(run("project", "close", "--force", cwd=d).returncode == 0,
@@ -480,10 +473,7 @@ def an_unchanged_scope_is_not_a_new_pass():
     d = repo()
     write(d, "a.py", "v2\n")
     run("init", "--", "a.py", cwd=d, check=True)
-    run("validate", "--", "true", cwd=d)
-    run("pass-start", cwd=d, check=True)
-    run("pass-record", "--score", "9", "--findings", "0", "--understood",
-        "--test-evidence", "trusted", cwd=d, check=True)
+    pass_through(d, "9", "0", "trusted")
     ok(run("pass-start", cwd=d).returncode != 0,
        "a second full pass on identical code must be refused")
 
@@ -570,13 +560,8 @@ def task_brief_file_is_read_from_the_callers_directory():
 
 @case
 def state_is_written_atomically():
-    """A write that dies partway must leave the previous state readable.
-
-    state.json is the whole review history, so a truncate-then-write turns a Ctrl-C or a
-    full disk into "reset and start over". The failure is provoked directly — an
-    unserializable value makes json.dump raise after it has already emitted the opening
-    keys — because no sequence of CLI calls can interrupt a write on purpose.
-    """
+    """A write that dies partway must leave the previous state readable. Provoked directly:
+    no CLI sequence can interrupt a write on purpose."""
     d = repo()
     write(d, "a.py", "v2\n")
     run("init", "--", "a.py", cwd=d, check=True)
@@ -691,13 +676,8 @@ def doc_command_lines():
 
 @case
 def every_command_in_the_prose_exists_in_the_cli():
-    """The prose is executed by a model; a flag it names that the CLI lacks is a dead end.
-
-    Nothing else can catch this: exercising the script proves the script works, not that the
-    document describing it is true. A leftover `python3 scripts/loop_review.py …` from an
-    earlier revision sat in SKILL.md through several passes because every test invoked the
-    script by absolute path.
-    """
+    """The prose is executed by a model; a flag it names that the CLI lacks is a dead end,
+    and exercising the script cannot catch it."""
     lines = doc_command_lines()
     ok(len(lines) >= 12, f"expected the prose to show the command surface, found {len(lines)}")
     parser = module().build_parser()
@@ -748,12 +728,8 @@ def the_prose_never_invokes_the_script_by_a_repo_relative_path():
 
 @case
 def a_pass_records_what_the_reviewer_gave_and_amend_fills_the_rest():
-    """SKILL.md's remedy for an incomplete review must be executable.
-
-    `--score` and `--test-evidence` were required, so a reviewer that omitted a verdict left
-    no legal move: the pass could not be recorded, `amend` had nothing to amend, and the
-    only way forward was inventing the value the loop exists to stop anyone inventing.
-    """
+    """Record what the reviewer gave, `amend` the rest — the alternative was inventing a
+    verdict, which is what the loop exists to stop."""
     d = repo()
     write(d, "a.py", "v2\n")
     run("init", "--", "a.py", cwd=d, check=True)
@@ -770,10 +746,7 @@ def a_clean_report_only_area_still_leaves_its_review_behind():
     d = repo({"pkg/a.py": "x\n"})
     run("project", "init", "--report-only", "--", "pkg", cwd=d, check=True)
     run("project", "next", cwd=d, check=True)
-    run("validate", "--", "true", cwd=d)
-    run("pass-start", cwd=d, check=True)
-    run("pass-record", "--score", "9.5", "--findings", "0", "--understood",
-        "--test-evidence", "trusted", cwd=d, check=True)
+    pass_through(d, "9.5", "0", "trusted")
     ok(run("project", "close", cwd=d).returncode != 0,
        "a clean area's review must be written down too — closing deletes the loop state")
     findings(d, "pkg", "A. No actionable findings\nB. ...\nC. trusted\nD. 9.5\n")
@@ -869,19 +842,12 @@ def an_unusable_recorded_review_is_not_what_the_workflow_asks_for():
 
 @case
 def a_fix_outside_the_scope_can_be_brought_under_the_gates():
-    """The reviewer points at the cause next door; the fix lands outside the recorded scope.
-
-    Without a way to widen, that fix moved no fingerprint, the review stayed "current", and
-    `accept` signed off code no reviewer had seen — while `init --force`, the only mechanical
-    alternative, destroys the pass history.
-    """
+    """A fix landing next door moves no fingerprint, so no gate sees it until the scope is
+    widened — and widening must keep the pass history."""
     d = repo({"src/client.ts": "a\n", "src/helper.ts": "b\n"})
     write(d, "src/client.ts", "a2\n")
     run("init", "--", "src/client.ts", cwd=d, check=True)
-    run("validate", "--", "true", cwd=d)
-    run("pass-start", cwd=d, check=True)
-    run("pass-record", "--score", "8", "--findings", "1", "--understood",
-        "--test-evidence", "trusted", cwd=d, check=True)
+    pass_through(d, "8", "1", "trusted")
     write(d, "src/helper.ts", "b2\n")                  # the fix lands outside the scope
     run("resolve", "--fixed", "1", cwd=d, check=True)
     before = run("fingerprint", cwd=d, check=True).stdout.strip()
@@ -901,12 +867,8 @@ def a_fix_outside_the_scope_can_be_brought_under_the_gates():
 
 @case
 def an_area_with_no_runnable_check_is_recorded_honestly():
-    """Prose, config and fixtures have no test, typecheck, lint or build.
-
-    `pass-start` refuses without a validation record and `--force` does not cover that
-    refusal, so the only move left was `validate -- true` — green for the gate, and
-    transcribed into the reviewer's prompt as a check the author claims to have run.
-    """
+    """Prose and config have nothing to run, and `validate -- true` would reach the reviewer
+    as a check the author claims to have run."""
     d = repo({"docs/guide.md": "text\n"})
     write(d, "docs/guide.md", "text\nmore\n")
     run("init", "--", "docs", cwd=d, check=True)
@@ -924,19 +886,12 @@ def an_area_with_no_runnable_check_is_recorded_honestly():
 
 @case
 def a_project_area_is_freed_by_close_not_by_reset():
-    """Step 6 ends a task loop with `reset`; an area ends with `project close`.
-
-    Applying step 6 verbatim inside an area destroyed its outcome: `project close` then
-    refused, and the blessed recovery `project close --force` recorded an area that had
-    passed every gate as `incomplete`, with passes, score and verdict all null.
-    """
+    """A task loop ends with `reset`; an area ends with `project close`. Confusing them
+    discarded an area that had passed every gate."""
     d = repo({"pkg/a.py": "x\n"})
     run("project", "init", "--", "pkg", cwd=d, check=True)
     run("project", "next", cwd=d, check=True)
-    run("validate", "--", "true", cwd=d)
-    run("pass-start", cwd=d, check=True)
-    run("pass-record", "--score", "9.5", "--findings", "0", "--understood",
-        "--test-evidence", "trusted", cwd=d, check=True)
+    pass_through(d, "9.5", "0", "trusted")
     ok(run("accept", cwd=d).returncode == 0, "precondition: the area passes every gate")
     ok(run("reset", cwd=d).returncode != 0, "reset must refuse rather than discard the outcome")
     ok(run("project", "close", cwd=d).returncode != 0,
@@ -996,7 +951,7 @@ def status_prints_what_the_reviewer_prompt_needs():
 
 @case
 def the_pass_limit_is_a_hard_stop():
-    """The refusal the whole script exists for: a mutation removing it survived the suite."""
+    """The refusal the whole script exists for."""
     d = repo()
     write(d, "a.py", "v1\nv2\n")
     run("init", "--max-passes", "2", "--", "a.py", cwd=d, check=True)
@@ -1032,18 +987,12 @@ def resolved_never_exceeds_the_findings_reported():
 
 @case
 def a_scope_that_empties_after_init_stops_the_loop():
-    """The emptiness guard belonged to `init` alone, so a loop could review nothing.
-
-    Reverting, stashing or committing the work mid-loop — all things SKILL.md permits —
-    left `pass-start` and `accept` passing over a zero-byte diff.
-    """
+    """A scope that empties mid-loop — reverted, stashed, committed, deleted — must stop the
+    loop, not pass every gate over nothing."""
     d = repo()
     write(d, "a.py", "v1\nv2\n")
     run("init", "--", "a.py", cwd=d, check=True)
-    run("validate", "--", "true", cwd=d)
-    run("pass-start", cwd=d, check=True)
-    run("pass-record", "--score", "9.5", "--findings", "0", "--understood",
-        "--test-evidence", "trusted", cwd=d, check=True)
+    pass_through(d, "9.5", "0", "trusted")
     sh("git checkout -- a.py", d)                              # the change is reverted
     r = run("accept", cwd=d)
     # Assert the reason, not just the exit code: a stale fingerprint also fails `accept`
@@ -1087,11 +1036,7 @@ def a_scope_path_git_cannot_see_is_reported():
 
 @case
 def acceptance_refuses_by_name_for_each_of_the_four_conditions():
-    """Each blocker must be provable on its own.
-
-    Three of the four survived deletion with a green suite, because the cases that looked
-    like coverage asserted only a non-zero exit — which another blocker also produces.
-    """
+    """Each blocker proved on its own: a non-zero exit is also produced by the others."""
     def loop(d):
         run("init", "--", "a.py", cwd=d, check=True)
         run("validate", "--", "true", cwd=d)
@@ -1132,20 +1077,16 @@ def acceptance_refuses_by_name_for_each_of_the_four_conditions():
 
 @case
 def a_project_area_cannot_be_closed_from_someone_elses_loop():
-    """`init --force` inside an area replaced its loop; `project close` then signed the area
-    off from a review of unrelated code, with `accepted` and a score in the ledger."""
+    """A foreign loop must not be recorded as this area's outcome."""
     d = repo({"pkg/a.py": "1\n", "lib/b.py": "2\n"})
     run("project", "init", "--", "pkg", "lib", cwd=d, check=True)
     run("project", "next", cwd=d, check=True)                  # area `pkg`
     write(d, "lib/b.py", "3\n")
     r = run("init", "--force", "--", "lib/b.py", cwd=d)
     ok(r.returncode != 0, "re-initialising inside a live area must be refused")
-    run("reset", "--force", cwd=d, check=True)                 # the blunt way out
+    os.remove(os.path.join(d, ".loop-review", "state.json"))   # the loop is lost
     run("init", "--", "lib/b.py", cwd=d, check=True)           # a foreign changes-mode loop
-    run("validate", "--", "true", cwd=d)
-    run("pass-start", cwd=d, check=True)
-    run("pass-record", "--score", "10", "--findings", "0", "--understood",
-        "--test-evidence", "trusted", cwd=d, check=True)
+    pass_through(d, "10", "0", "trusted")
     ok(run("accept", cwd=d).returncode == 0, "that foreign loop is itself acceptable")
     findings(d, "pkg")            # so the close cannot fail merely for a missing file
     r = run("project", "close", cwd=d)
@@ -1155,14 +1096,11 @@ def a_project_area_cannot_be_closed_from_someone_elses_loop():
 
 @case
 def a_report_only_area_that_moved_after_its_pass_is_not_reviewed():
-    """Report-only never reaches blockers(), so it asked neither question."""
+    """Report-only never reaches blockers(), so it must ask staleness itself."""
     d = repo({"pkg/a.py": "x\n"})
     run("project", "init", "--report-only", "--", "pkg", cwd=d, check=True)
     run("project", "next", cwd=d, check=True)
-    run("validate", "--", "true", cwd=d)
-    run("pass-start", cwd=d, check=True)
-    run("pass-record", "--score", "8", "--findings", "1", "--understood",
-        "--test-evidence", "trusted", cwd=d, check=True)
+    pass_through(d, "8", "1", "trusted")
     findings(d, "pkg", "three findings\n")
     write(d, "pkg/a.py", "completely rewritten after the review\n")
     run("project", "close", cwd=d, check=True)
@@ -1173,8 +1111,7 @@ def a_report_only_area_that_moved_after_its_pass_is_not_reviewed():
 
 @case
 def an_identical_repeat_review_can_still_be_closed():
-    """A clean area legitimately produces the same text twice; digest-only comparison then
-    refused the close forever, with a message that misdiagnosed it."""
+    """A clean area legitimately produces the same text twice."""
     d = repo({"pkg/a.py": "x\n"})
     text = "A. No actionable findings\n"
     for expect_ok in (True, True):
@@ -1191,13 +1128,8 @@ def an_identical_repeat_review_can_still_be_closed():
 
 @case
 def reverting_a_fix_batch_un_resolves_its_findings():
-    """`resolved` was the one counter bound to no state.
-
-    Fix, `resolve`, then revert (`git checkout --`, `stash`): the scope returns to the very
-    fingerprint the review called defective, the pass is "current" again, the old green
-    validation still stands, and `unresolved` is zero — so `accept` signed off code whose
-    findings are all still there.
-    """
+    """Fix, `resolve`, revert: the scope is back on the fingerprint the review called
+    defective with `unresolved` at zero, so the resolution must not survive."""
     d = repo({"src/a.py": "buggy\n"})
     write(d, "src/a.py", "buggy\nchanged\n")
     run("init", "--", "src/a.py", cwd=d, check=True)
@@ -1223,10 +1155,7 @@ def two_areas_never_share_a_findings_file():
     run("project", "init", "--report-only", "--", "src", "+", "lib", "src/lib", cwd=d, check=True)
     first = run("project", "next", cwd=d, check=True).stdout.split(
         "findings file: ")[1].splitlines()[0]
-    run("validate", "--", "true", cwd=d)
-    run("pass-start", cwd=d, check=True)
-    run("pass-record", "--score", "8", "--findings", "1", "--understood",
-        "--test-evidence", "trusted", cwd=d, check=True)
+    pass_through(d, "8", "1", "trusted")
     with open(os.path.join(d, first), "w") as f:
         f.write("area one\n")
     run("project", "close", cwd=d, check=True)
@@ -1239,11 +1168,7 @@ def two_areas_never_share_a_findings_file():
 
 @case
 def skill_md_stays_inside_the_budget_the_passport_states():
-    """SKILL.md is loaded into the agent's context on every invocation.
-
-    The budget is parsed out of AGENTS.md rather than hardcoded, so the number and the file
-    cannot drift apart — which is exactly what happened while nothing checked either.
-    """
+    """The budget is parsed out of AGENTS.md, so the number and the file cannot drift."""
     passport = _io.open(os.path.join(ROOT, "AGENTS.md"), encoding="utf-8").read()
     m = re.search(r"budget it in words[^)]*?\(~(\d+)\)", passport)
     ok(m is not None, "AGENTS.md must state the SKILL.md word budget in a parseable form")
