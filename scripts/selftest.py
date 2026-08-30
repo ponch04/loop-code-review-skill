@@ -363,6 +363,29 @@ def a_red_check_is_labelled_inherited_or_regressed():
 
 
 @case
+def a_run_that_moved_the_scope_cannot_make_a_later_failure_read_as_regressed():
+    """A voided run is voided for every reader, provenance included.
+
+    `validate` marks a command that edited the files while checking them: it is evidence for
+    neither the state before nor the state after, and every gate skips it. `red_provenance`
+    did not, so one green-but-moving run was enough to stamp a later failure `[regressed]` —
+    telling a fresh reviewer that the change under review broke a check, on the strength of a
+    result the loop had already declared void.
+    """
+    d = repo({"pkg/a.py": "x\n"})
+    # Green on the first run and editing the scope as it goes; red on every run after.
+    check = "if [ -f pkg/marker ]; then exit 1; fi; touch pkg/marker; exit 0"
+    run("project", "init", "--", "pkg", cwd=d, check=True)
+    run("project", "next", cwd=d, check=True)
+    r = run("validate", "--", check, cwd=d)
+    ok("changed the scope" in r.stderr, f"the fixture must produce a moved-scope run: {r.stderr[:160]}")
+    run("validate", "--", check, cwd=d)                    # now red, scope settled
+    out = run("pass-start", cwd=d, check=True).stdout + run("status", cwd=d, check=True).stdout
+    ok("[inherited]" in out and "[regressed]" not in out,
+       f"a moved-scope run must not count as this check having been green: {out}")
+
+
+@case
 def report_only_reviews_an_area_whose_checks_are_already_red():
     """A red repository is exactly the kind that gets a full review commissioned."""
     d = repo({"pkg/a.py": "x\n"})

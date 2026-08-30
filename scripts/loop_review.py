@@ -463,7 +463,14 @@ def red_provenance(state, cmd):
     judge. The loop's own history answers this, so the agent never has to remember it.
     """
     for v in state["validation"]:
-        if v["cmd"] == cmd and v["exit"] == 0 and not v.get("retracted"):
+        # `moved_scope` runs are excluded for the same reason every other gate excludes them:
+        # a command that edited the files while checking them is evidence for neither state,
+        # so it cannot establish that the check was ever green here. Counting it did more
+        # than mislabel: `regressed` tells a fresh reviewer the change under review broke
+        # this check, and the only thing that "proved" it was green was a run whose result
+        # the loop had already declared void.
+        if (v["cmd"] == cmd and v["exit"] == 0
+                and not v.get("retracted") and not v.get("moved_scope")):
             return "regressed"
     return "inherited"
 
