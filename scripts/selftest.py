@@ -14,6 +14,7 @@ Each case builds a throwaway repository under a temp dir and asserts observable 
 exit codes, fingerprints, ledger contents — never internals.
 """
 import argparse
+import ast
 import contextlib
 import importlib.util
 import io as _io
@@ -178,6 +179,58 @@ def an_area_emptied_after_queueing_is_refused_at_open():
     st = json.load(open(os.path.join(d, ".loop-review", "project.json")))
     ok(st["areas"][1]["status"] == "incomplete" and st["areas"][1]["blockers"],
        f"it must be recorded incomplete with its blocker, got {st['areas'][1]['status']}")
+
+
+@case
+def a_foreign_loop_never_traps_the_area_that_did_not_open_it():
+    """`project close` and `reset` must not each defer to the other.
+
+    When state.json belongs to some other loop, close cannot record an outcome from it and
+    reset once refused to discard it "because an area is mid-loop" — so the queue could only
+    be freed by deleting files by hand. Both halves are asserted by name: the refusal has to
+    quote a form the parser accepts, `--force` has to settle the area, and the foreign loop
+    has to survive it — it is another review's entire history.
+    """
+    d = repo({"a/x.py": "1\n", "b/y.py": "2\n"})
+    run("project", "init", "--", "a", "b", cwd=d, check=True)
+    run("project", "next", cwd=d, check=True)
+    sf = os.path.join(d, ".loop-review", "state.json")
+    st = json.load(open(sf))
+    st["scope"] = ["b"]                                # the open loop is not this area's
+    json.dump(st, open(sf, "w"), indent=2)
+
+    r = run("project", "close", cwd=d)
+    ok(r.returncode != 0 and "not area" in r.stderr,
+       f"close must refuse to sign another loop into this area, got rc={r.returncode}")
+    ok("project close --force" in r.stderr and "reset --force" not in r.stderr,
+       f"the refusal must name a route the CLI has: {r.stderr.strip()[:160]}")
+
+    r = run("project", "close", "--force", cwd=d)
+    ok(r.returncode == 0, f"--force must settle the area, got rc={r.returncode}: {r.stderr.strip()[:160]}")
+    led = json.load(open(os.path.join(d, ".loop-review", "project.json")))
+    ok(led["areas"][0]["status"] == "incomplete" and led["areas"][0]["blockers"],
+       f"the unreviewed area must be recorded incomplete with its blocker: {led['areas'][0]}")
+    ok(os.path.exists(sf), "the foreign loop must be left untouched — it is another review's history")
+
+    r = run("reset", cwd=d)
+    ok(r.returncode == 0 and not os.path.exists(sf),
+       f"reset must free a loop no in-progress area owns, got rc={r.returncode}")
+    r = run("project", "next", cwd=d)
+    ok(r.returncode == 0 and "b" in r.stdout, f"the queue must continue: {r.stdout.strip()[:120]}")
+
+
+@case
+def reset_still_refuses_to_discard_the_loop_of_the_area_that_owns_it():
+    """The other side of the same predicate: narrowing reset must not un-protect an outcome."""
+    d = repo({"a/x.py": "1\n"})
+    run("project", "init", "--", "a", cwd=d, check=True)
+    run("project", "next", cwd=d, check=True)
+    pass_through(d, "9.5", "0", "trusted")
+    r = run("reset", cwd=d)
+    ok(r.returncode != 0 and "mid-loop" in r.stderr,
+       f"reset must still refuse inside the area's own loop, got rc={r.returncode}")
+    ok(os.path.exists(os.path.join(d, ".loop-review", "state.json")),
+       "the area's own loop state must survive the refusal")
 
 
 @case
@@ -642,6 +695,56 @@ SUBCOMMANDS = ("init", "validate-drop", "validate", "pass-start", "pass-abort", 
                "project init", "project next", "project close", "project status", "reset")
 
 
+def command_hits(line):
+    """Invocations named in one line of prose or one message string, normalised for parsing.
+
+    Placeholders are made concrete (`<paths...>` -> a word, `a|b` -> `a`, `[--flag v]` ->
+    `--flag v`) so the line can be handed to the real parser: what is being checked is that
+    the subcommand and its flags exist, not that the example values are meaningful.
+    """
+    hits = [m.group(1) for m in
+            re.finditer(r"`?(?:python3\s+\S*loop_review\.py|LR)\s+([^`\n]+)", line)]
+    # Bare inline mentions — `validate-drop --force`, `project close --force` — name
+    # the CLI just as much as a fenced `LR` line, and the CLI is this skill's public
+    # API. They were unchecked while every fenced line was parsed.
+    hits += [m.group(1) for m in re.finditer(r"`((?:%s)(?:\s+[^`\n]*)?)`"
+                                             % "|".join(SUBCOMMANDS), line)]
+    out = []
+    for body in hits:
+        body = body.split("#")[0]
+        if body.strip() in ("--help",):               # not a subcommand invocation
+            continue
+        body = body.rstrip("`.,;:")
+        body = re.sub(r"<[^>]*>", "ARG", body)
+        body = re.sub(r"\[([^\]]*)\]", r"\1", body)
+        body = re.sub(r"(\w)\|[\w|-]+", r"\1", body)
+        out.append(body.strip())
+    return out
+
+
+def script_message_lines():
+    """Every invocation the script *tells the operator to run*, from its own die()/print().
+
+    A message naming a command that does not exist is the same dead end as prose naming one,
+    and it is worse hidden: `cmd_project_close` advised `reset --force` for months, a flag
+    `reset` never had, while the only other route out of that state was refused as well.
+    Messages are prose too — they are read by the agent and are part of the CLI's contract.
+    """
+    src = _io.open(os.path.join(ROOT, "scripts", "loop_review.py"), encoding="utf-8").read()
+    out = []
+    for node in ast.walk(ast.parse(src)):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                and node.func.id in ("die", "print")):
+            continue
+        for arg in ast.walk(node):
+            # f-strings contribute their literal parts; an interpolated value is not a
+            # command name, so dropping it cannot hide one.
+            if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                for body in command_hits(arg.value):
+                    out.append((f"scripts/loop_review.py:{node.lineno}", arg.value.strip(), body))
+    return out
+
+
 def doc_command_lines():
     """Every loop_review invocation printed in the normative prose, normalised for parsing.
 
@@ -655,31 +758,13 @@ def doc_command_lines():
         text = text.replace("\\\n", " ")                     # fenced line continuations
         for raw in text.splitlines():
             line = raw.strip().lstrip("#").strip()
-            hits = [m.group(1) for m in
-                    re.finditer(r"`?(?:python3\s+\S*loop_review\.py|LR)\s+([^`\n]+)", line)]
-            # Bare inline mentions — `validate-drop --force`, `project close --force` — name
-            # the CLI just as much as a fenced `LR` line, and the CLI is this skill's public
-            # API. They were unchecked while every fenced line was parsed.
-            hits += [m.group(1) for m in re.finditer(r"`((?:%s)(?:\s+[^`\n]*)?)`"
-                                                     % "|".join(SUBCOMMANDS), line)]
-            for body in hits:
-                body = body.split("#")[0]
-                if body.strip() in ("--help",):               # not a subcommand invocation
-                    continue
-                body = body.rstrip("`.,;:")
-                body = re.sub(r"<[^>]*>", "ARG", body)
-                body = re.sub(r"\[([^\]]*)\]", r"\1", body)
-                body = re.sub(r"(\w)\|[\w|-]+", r"\1", body)
-                out.append((rel, raw.strip(), body.strip()))
+            for body in command_hits(line):
+                out.append((rel, raw.strip(), body))
     return out
 
 
-@case
-def every_command_in_the_prose_exists_in_the_cli():
-    """The prose is executed by a model; a flag it names that the CLI lacks is a dead end,
-    and exercising the script cannot catch it."""
-    lines = doc_command_lines()
-    ok(len(lines) >= 12, f"expected the prose to show the command surface, found {len(lines)}")
+def assert_invocations_parse(lines):
+    """Hand every named invocation to the real parser; collect what it will not accept."""
     parser = module().build_parser()
     for rel, raw, body in lines:
         try:
@@ -690,8 +775,10 @@ def every_command_in_the_prose_exists_in_the_cli():
         if not tokens:
             continue
         # Prose legitimately names a flag without its value ("record it with `--scope-note`"),
-        # so a value-taking flag at the end is retried with a placeholder. An unknown flag or
-        # subcommand still fails both attempts, which is what this case is for.
+        # so a value-taking flag at the end is retried with a placeholder — a word, then a
+        # number, because a typed flag like `--findings` rejects the word and would otherwise
+        # read as a broken command. An unknown flag or subcommand fails every attempt, which
+        # is what this case is for.
         # A bare subcommand mention ("`pass-record` requires only --findings") names the CLI
         # without invoking it; demanding its mandatory flags would flag correct prose. Check
         # that the name exists instead.
@@ -699,7 +786,7 @@ def every_command_in_the_prose_exists_in_the_cli():
             if " ".join(tokens) not in SUBCOMMANDS:
                 FAILURES.append(f"{rel}: `{raw}` names no such subcommand")
             continue
-        for attempt in (tokens, tokens + ["ARG"]):
+        for attempt in (tokens, tokens + ["ARG"], tokens + ["1"]):
             buf = _io.StringIO()
             try:
                 with contextlib.redirect_stderr(buf), contextlib.redirect_stdout(buf):
@@ -709,6 +796,29 @@ def every_command_in_the_prose_exists_in_the_cli():
                 last = buf.getvalue().strip().splitlines()[-1:] or [""]
         else:
             FAILURES.append(f"{rel}: `{raw}` is not accepted by the CLI ({last})")
+
+
+@case
+def every_command_in_the_prose_exists_in_the_cli():
+    """The prose is executed by a model; a flag it names that the CLI lacks is a dead end,
+    and exercising the script cannot catch it."""
+    lines = doc_command_lines()
+    ok(len(lines) >= 12, f"expected the prose to show the command surface, found {len(lines)}")
+    assert_invocations_parse(lines)
+
+
+@case
+def every_command_the_script_recommends_exists_in_the_cli():
+    """A refusal that names the way out is only useful if that way exists.
+
+    `project close` sent the operator to `reset --force`, which `reset` has never accepted,
+    while the plain `reset` it also implied was refused mid-area — the two commands together
+    left no route out of the state at all. Checking the prose could not see it: the dead end
+    was quoted in a die() string, not in a document.
+    """
+    lines = script_message_lines()
+    ok(len(lines) >= 10, f"expected the messages to name the CLI, found {len(lines)}")
+    assert_invocations_parse(lines)
 
 
 @case

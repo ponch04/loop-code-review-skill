@@ -1074,9 +1074,18 @@ def cmd_reset(a):
         except (OSError, ValueError, KeyError):
             busy = None
         if busy:
-            die(f"area `{area_name(busy)}` is mid-loop — `project close` records its outcome "
-                "and frees the loop, or `project close --force` settles it `incomplete`. "
-                "`reset` here would discard the outcome instead.")
+            try:
+                with open(STATE_FILE, encoding="utf-8") as f:
+                    open_loop = json.load(f)
+            except (OSError, ValueError):
+                open_loop = {}
+            # Only that area's own loop is worth protecting. A loop from another scope holds
+            # no outcome for this area, and refusing to clear it was one half of a deadlock:
+            # `project close` would not record from it either, so neither command could move.
+            if loop_is_area(open_loop, busy):
+                die(f"area `{area_name(busy)}` is mid-loop — `project close` records its outcome "
+                    "and frees the loop, or `project close --force` settles it `incomplete`. "
+                    "`reset` here would discard the outcome instead.")
     if a.project:
         if os.path.exists(PROJECT_FILE):
             os.remove(PROJECT_FILE)
@@ -1134,6 +1143,15 @@ def save_project(p):
 def area_paths(x):
     # Ledgers written before multi-path areas store a single "path" string.
     return x["paths"] if "paths" in x else [x["path"]]
+
+
+def loop_is_area(state, area):
+    """True when the open loop is the one this area opened.
+
+    `project close` records an outcome from it and `reset` refuses to discard it; both need
+    the same answer, and asking it in two ways is how they came to disagree.
+    """
+    return state.get("mode") == "project" and set(area_paths(area)) <= set(state.get("scope") or [])
 
 
 def area_name(x):
@@ -1338,10 +1356,24 @@ def cmd_project_close(a):
     state = load()
     # The loop on disk must be *this* area's. Anything else is a review of other code being
     # signed into this area's row.
-    if state.get("mode") != "project" or not set(area_paths(cur)) <= set(state["scope"]):
-        die(f"the open loop is not area `{area_name(cur)}` (mode {state.get('mode')}, scope "
-            f"{state['scope']}) — its outcome cannot be recorded here. `reset --force` "
-            "discards that loop, then `project next` reopens the area.")
+    if not loop_is_area(state, cur):
+        if not a.force:
+            die(f"the open loop is not area `{area_name(cur)}` (mode {state.get('mode')}, scope "
+                f"{state['scope']}) — its outcome cannot be recorded here. "
+                "`project close --force` settles this area `incomplete` and leaves that loop "
+                "alone; `reset` then frees it and the queue continues with `project next`.")
+        # Settle the area from what is known — nothing — and do not touch the foreign loop:
+        # it is some other review's whole history, and this command has no claim on it. The
+        # area stays in the ledger, visible for a re-run.
+        cur.update({"status": "incomplete", "closed": now(),
+                    "blockers": ["the open loop belongs to another scope; this area was never reviewed"],
+                    "passes": None, "findings": None, "resolved": None, "score": None,
+                    "test_evidence": None, "understood": None, "findings_file": None})
+        save_project(p)
+        print(f"area `{area_name(cur)}` closed: incomplete — the open loop is not this area's")
+        print(f"note: {STATE_FILE} was left untouched; `reset` discards it when that loop is done",
+              file=sys.stderr)
+        return
     state["fingerprint_current"] = fp_of(state)
     lp = last_recorded_pass(state)
     ffile = os.path.join(FINDINGS_DIR, area_slug(cur) + ".md")
