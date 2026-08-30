@@ -780,6 +780,34 @@ def multi_path_areas_are_one_area_with_a_bounded_slug():
     ok(os.path.exists(os.path.join(d, stem)), "the findings file must be creatable")
 
 
+@case
+def a_dangling_glue_operator_is_refused_at_either_end():
+    """`+` joins two paths, so an end of the list is not a place it can do its job.
+
+    A leading `+` was refused from the start; a trailing one was dropped in silence, and
+    dropping it changes the queue rather than just the wording — `a b +` queued two separate
+    areas where the operator asked for a join, and nothing in the output said a token had
+    been ignored. The refusal has to be symmetric, and it must not cost the valid forms.
+    """
+    d = repo({"a/x.py": "1\n", "b/y.py": "2\n"})
+    r = run("project", "init", "--", "a", "b", "+", cwd=d)
+    ok(r.returncode != 0 and "+" in r.stderr,
+       f"a trailing `+` must be refused, not dropped: rc={r.returncode} {r.stderr.strip()[:120]}")
+    ok(not os.path.exists(os.path.join(d, ".loop-review", "project.json")),
+       "and a refused queue must not be written to the ledger")
+    r = run("project", "init", "--", "+", "a", cwd=d)
+    ok(r.returncode != 0, "a leading `+` must still be refused")
+
+    r = run("project", "init", "--", "a", "+", "b", cwd=d, check=True)
+    ok(r.stdout.count("\n  - ") == 1, "the glued form must still queue one area")
+    led = json.load(open(os.path.join(d, ".loop-review", "project.json")))
+    ok(led["areas"][0]["paths"] == ["a", "b"], f"joined into one area: {led['areas'][0]['paths']}")
+    r = run("project", "init", "--force", "--", "a", "b", cwd=d, check=True)
+    led = json.load(open(os.path.join(d, ".loop-review", "project.json")))
+    ok([x["paths"] for x in led["areas"]] == [["a"], ["b"]],
+       f"and without `+` they stay separate: {[x['paths'] for x in led['areas']]}")
+
+
 # ----------------------------------------------------------------- prose vs the real CLI
 
 # README.md and AGENTS.md name commands and flags as densely as SKILL.md does, and AGENTS.md

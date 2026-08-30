@@ -1205,6 +1205,12 @@ def parse_areas(raw, root):
     `a b + c d` -> [a], [b, c], [d]. A flat package split across files, or sibling edge
     functions grouped by meaning, are one area even though they are several paths.
     """
+    # Checked before any path is resolved, and symmetric with the leading case below: a
+    # trailing `+` has no neighbour on its right, so the join it asks for cannot happen.
+    # Dropping it silently changed the queue itself — `a b +` became two areas where the
+    # operator said one — and nothing in the output said the token had been ignored.
+    if raw and raw[-1] == "+":
+        die("`+` must join two paths; it cannot end the list")
     areas, cur = [], []
     for tok in raw:
         if tok == "+":
