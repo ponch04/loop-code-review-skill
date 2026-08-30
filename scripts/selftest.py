@@ -720,6 +720,46 @@ def report_only_close_requires_the_findings_file():
 
 
 @case
+def forcing_a_close_past_a_missing_findings_file_never_yields_accepted():
+    """`--force` never lets an area pass — fix mode was the hole.
+
+    Report-only folded the missing file into the area's blockers; fix mode only skipped the
+    refusal, so a clean loop closed `accepted` with `findings_file: null` after `state.json`
+    was deleted. The ledger then claimed a review that no longer existed anywhere: the row
+    said the area passed, and the reviewer's output — the whole deliverable for an area with
+    no findings — was gone.
+    """
+    d = repo({"pkg/a.py": "v1\n"})
+    run("project", "init", "--", "pkg", cwd=d, check=True)     # fix mode
+    run("project", "next", cwd=d, check=True)
+    pass_through(d, "9.5", "0", "trusted")
+    ok(run("project", "close", cwd=d).returncode != 0,
+       "the missing findings file must be refused while it can still be written")
+    r = run("project", "close", "--force", cwd=d)
+    ok(r.returncode == 0, f"--force must settle the area, got rc={r.returncode}")
+    area = json.load(open(os.path.join(d, ".loop-review", "project.json")))["areas"][0]
+    ok(area["status"] == "incomplete",
+       f"a forced close with no surviving review must not read as accepted, got {area['status']}")
+    ok(any("findings" in b for b in area["blockers"]),
+       f"and the reason must say so: {area['blockers']}")
+
+
+@case
+def a_clean_area_with_its_findings_file_still_closes_accepted():
+    """The other side: the gate must not turn every fix-mode area incomplete."""
+    d = repo({"pkg/a.py": "v1\n"})
+    run("project", "init", "--", "pkg", cwd=d, check=True)
+    out = run("project", "next", cwd=d, check=True).stdout
+    stem = out.split("findings file: ")[1].splitlines()[0]
+    pass_through(d, "9.5", "0", "trusted")
+    _io.open(os.path.join(d, stem), "w").write("A. no actionable findings\nB. understood\n")
+    ok(run("project", "close", cwd=d).returncode == 0, "a clean area with its file must close")
+    area = json.load(open(os.path.join(d, ".loop-review", "project.json")))["areas"][0]
+    ok(area["status"] == "accepted" and area["findings_file"],
+       f"and it must be recorded accepted with its file: {area['status']}, {area['findings_file']}")
+
+
+@case
 def multi_path_areas_are_one_area_with_a_bounded_slug():
     files = {f"pkg/f{i}.py": "x\n" for i in range(11)}
     d = repo(files)

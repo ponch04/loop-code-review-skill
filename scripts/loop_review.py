@@ -1442,10 +1442,14 @@ def cmd_project_close(a):
         # The findings file is required here for the same reason as in report-only: closing
         # deletes `state.json`, so for a clean area that file is the entire surviving record
         # of the review — its understanding summary, test-evidence basis and score rationale.
-        if r and not findings_are_current(ffile, cur) and not a.force:
-            die(f"cannot close area: {ffile} is missing — write this reviewer's whole output there; closing deletes the loop state, so "
-                "nothing else survives (--force closes it anyway, losing the review)")
-        reasons = blockers(state)
+        if r and not findings_are_current(ffile, cur):
+            if not a.force:
+                die(f"cannot close area: {ffile} is missing — write this reviewer's whole output there; closing deletes the loop state, so "
+                    "nothing else survives (--force closes it as incomplete instead, losing the review)")
+            # Forcing past it cannot leave the area `accepted`: the record the row would rest
+            # on is exactly what was never written, and `--force` never lets an area pass —
+            # here as in report-only, it settles the area with the reason attached.
+            reasons = reasons + [f"{ffile} was never written — the review did not survive the close"]
         cur["status"] = "accepted" if not reasons else "incomplete"
         cur["blockers"] = reasons
     cur["closed"] = now()
