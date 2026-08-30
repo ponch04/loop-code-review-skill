@@ -808,6 +808,30 @@ def a_dangling_glue_operator_is_refused_at_either_end():
        f"and without `+` they stay separate: {[x['paths'] for x in led['areas']]}")
 
 
+@case
+def the_script_carries_no_unreachable_helper():
+    """A helper nobody calls is a claim about the workflow that nothing enforces.
+
+    `findings_digest` outlived the rule it implemented: the digest comparison was replaced by
+    the `.prev.md` rotation, and the function stayed behind for releases — read as live
+    machinery by anyone auditing how the findings gate works, while the real gate was a plain
+    existence check somewhere else. Names referenced only from `selftest.py` count as live;
+    everything else must be reachable from within the script.
+    """
+    src = _io.open(os.path.join(ROOT, "scripts", "loop_review.py"), encoding="utf-8").read()
+    tree = ast.parse(src)
+    defined = {n.name: n.lineno for n in tree.body if isinstance(n, ast.FunctionDef)}
+    used = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
+    used |= {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)}
+    # The entry point is called by the interpreter, and selftest drives the CLI through these.
+    used |= {"main", "build_parser"}
+    used |= set(re.findall(r"module\(\)\.([A-Za-z_]\w*)",
+                           _io.open(os.path.join(ROOT, "scripts", "selftest.py"),
+                                    encoding="utf-8").read()))
+    dead = sorted((name, line) for name, line in defined.items() if name not in used)
+    ok(not dead, "unreachable helper(s): " + "; ".join(f"{n} at line {l}" for n, l in dead))
+
+
 # ----------------------------------------------------------------- prose vs the real CLI
 
 # README.md and AGENTS.md name commands and flags as densely as SKILL.md does, and AGENTS.md
