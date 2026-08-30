@@ -62,8 +62,10 @@ python3 scripts/loop_review.py --help          # argument surface parses
 both modes, red validation, an unchanged fingerprint, shrinking evidence, a validation run
 that edited what it validated, `validate-drop`'s never-ran-vs-ran distinction, out-of-range
 arguments, `amend` lowering findings, an interrupted state write, report-only close without
-a findings file. A happy-path smoke is worthless here: one stayed green while three fixed
-defects were reverted. Any change to a gate adds or updates a case in the same commit, and
+a findings file. Every invocation the CLI *recommends* is parsed too — the prose in the docs
+and the commands quoted in the script's own `die()`/`print()` messages alike: `project close`
+sent the operator to a `--force` flag that `reset` has never had, and only the parser saw it. A
+happy-path smoke is worthless here: one stayed green while three fixed defects were reverted. Any change to a gate adds or updates a case in the same commit, and
 a new case must be shown to fail on the defect it covers before it is trusted.
 
 Assert the blocker, not the exit code. A case that checks only `returncode != 0` is usually
@@ -151,8 +153,10 @@ and judged against `expected_output`. There is no CI.
   `brief`, `project init` and `project close`; `--allow-empty` on `init` and `project init` is
   the same thing under another name. Keep this list complete — it is the audit surface. All
   are opt-in and the agent uses none on its own initiative, with one exception: `project close
-  --force` on an area whose loop state was lost, which settles it `incomplete` so the queue
-  continues. It never lets an area pass. `validate-drop` without `--force` retracts only
+  --force` on an area whose loop state was lost — or belongs to another scope — which settles
+  it `incomplete` so the queue continues. It never lets an area pass, and it never deletes a
+  loop it does not own; `reset` refuses only the in-progress area's *own* loop, because a
+  foreign one holds no outcome to protect and refusing both left no way out at all. `validate-drop` without `--force` retracts only
   records whose exit status means the command never ran (126/127); retracted records stay in
   `state.json` with a reason rather than being deleted.
 

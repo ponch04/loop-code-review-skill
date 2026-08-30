@@ -50,6 +50,9 @@ whole output over it. Closing deletes the loop state, so that file is all that s
 clean area needs it as much as a noisy one.
 
 Never `reset` inside an area: `project close` is what records its outcome and frees the loop.
+If the open loop turns out to belong to something else — another scope entirely — `project
+close --force` settles this area `incomplete` without touching that loop, and `reset` then
+frees it.
 
 If a fix lands outside the area — the reviewer named the cause in a neighbouring file — widen
 the loop with `scope --` exactly as in task mode, so the next pass covers it. Say so in the
