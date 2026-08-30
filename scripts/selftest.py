@@ -493,6 +493,65 @@ def a_command_that_never_ran_is_droppable_a_failure_is_not():
 
 
 @case
+def an_inherited_check_cannot_be_retired_by_letting_it_fail_to_start():
+    """The evidence set may only shrink by a human decision — from every direction.
+
+    `validate-drop` waives its refusal for exits 126/127, because a command that never ran
+    is bookkeeping, not evidence. Read as "no record here", that exemption swallowed the
+    inherited case too: run a check the last pass rested on after its tool is gone, take the
+    127, drop the record without `--force`, and `pass-start` accepted the shrunken set. The
+    tool disappearing is a fact about the environment, not permission to review on less.
+    """
+    d = repo({"src/a.py": "1\n"})
+    tool = os.path.join(d, "suite.sh")
+    _io.open(tool, "w").write("#!/bin/sh\nexit 0\n")
+    os.chmod(tool, 0o755)
+    write(d, "src/a.py", "2\n")
+    run("init", "--", "src", cwd=d, check=True)
+    run("validate", "--", tool, cwd=d)
+    run("validate", "--", "echo lint", cwd=d)
+    run("pass-start", cwd=d, check=True)
+    run("pass-record", "--score", "7", "--findings", "1", "--understood",
+        "--test-evidence", "trusted", cwd=d, check=True)
+
+    write(d, "src/a.py", "3\n")                       # the fix batch
+    run("resolve", "--fixed", "1", cwd=d, check=True)
+    os.remove(tool)                                   # the check can no longer start
+    run("validate", "--", tool, cwd=d)                # -> exit 127
+    run("validate", "--", "echo lint", cwd=d)
+
+    r = run("validate-drop", "--", tool, cwd=d)
+    ok(r.returncode != 0 and "--force" in r.stderr,
+       f"retiring an inherited check must need --force even at exit 127: rc={r.returncode} {r.stderr.strip()[:160]}")
+    r = run("pass-start", cwd=d)
+    ok(r.returncode != 0, "and the pass must not open while that check is unaccounted for")
+
+    r = run("validate-drop", "--force", "--reason", "tool retired", "--", tool, cwd=d)
+    ok(r.returncode == 0, f"--force must still retire it: {r.stderr.strip()[:160]}")
+    ok(run("pass-start", cwd=d).returncode == 0, "after the human decision the pass opens")
+
+
+@case
+def a_fresh_typo_no_pass_rested_on_still_clears_without_force():
+    """The other side of the same rule: the never-ran exemption must survive the fix, or a
+    mistyped command would strand the loop it never contributed evidence to."""
+    d = repo({"src/a.py": "1\n"})
+    write(d, "src/a.py", "2\n")
+    run("init", "--", "src", cwd=d, check=True)
+    run("validate", "--", "echo lint", cwd=d)
+    run("pass-start", cwd=d, check=True)
+    run("pass-record", "--score", "9", "--findings", "1", "--understood",
+        "--test-evidence", "trusted", cwd=d, check=True)
+    write(d, "src/a.py", "3\n")
+    run("resolve", "--fixed", "1", cwd=d, check=True)
+    run("validate", "--", "echo lint", cwd=d)
+    run("validate", "--", "pytset tests/", cwd=d)     # typo, no pass rested on it
+    r = run("validate-drop", "--", "pytset tests/", cwd=d)
+    ok(r.returncode == 0, f"a typo no pass leaned on must still clear freely: {r.stderr.strip()[:160]}")
+    ok(run("pass-start", cwd=d).returncode == 0, "and the pass opens on the unchanged evidence set")
+
+
+@case
 def validation_that_moves_the_scope_is_not_evidence():
     d = repo()
     write(d, "a.py", "v2\n")

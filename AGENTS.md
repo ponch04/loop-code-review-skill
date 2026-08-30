@@ -157,8 +157,10 @@ and judged against `expected_output`. There is no CI.
   it `incomplete` so the queue continues. It never lets an area pass, and it never deletes a
   loop it does not own; `reset` refuses only the in-progress area's *own* loop, because a
   foreign one holds no outcome to protect and refusing both left no way out at all. `validate-drop` without `--force` retracts only
-  records whose exit status means the command never ran (126/127); retracted records stay in
-  `state.json` with a reason rather than being deleted.
+  records whose exit status means the command never ran (126/127) **and that no recorded pass
+  rested on** — a check the review was granted on stays evidence once its tool disappears, so
+  retiring it is always the human's call; retracted records stay in `state.json` with a reason
+  rather than being deleted.
 
 ## Not a problem — do not file these
 

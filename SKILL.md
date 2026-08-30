@@ -55,7 +55,7 @@ If either surfaces later, record it with `LR brief --task-brief "..."` / `--scop
 
 *In task mode:* fix red validation before asking for a review; narrow a check that is also red before your change to the delta rather than recording a repository-wide invariant. *In project mode:* the pass opens over a failing check, since an inherited area is reviewed as it stands — `status` marks each `[inherited]` or `[regressed]`, and you pass that marker on. `accept` refuses on red in both. `references/project-mode.md` has the rest.
 
-A command that never ran (typo, missing tool) blocks `pass-start` in both modes — evidence about nothing, not an inherited failure: fix and re-run it, or retract it with `LR validate-drop -- <command>`, no `--force` needed. One that *edited* the scope while checking it counts as evidence for neither state: re-run it once the files settle.
+A command that never ran (typo, missing tool) blocks `pass-start` in both modes — evidence about nothing, not an inherited failure: fix and re-run it, or retract it with `LR validate-drop -- <command>` (`--force` once a pass rested on it). One that *edited* the scope counts as evidence for neither state: re-run once the files settle.
 
 **2. Open a review pass.** The script refuses if a pass is open, the limit is reached, validation is red *in task mode*, a check the previous pass rested on was not re-run, or the scope is unchanged since the last *recorded* pass — a second opinion on identical code is not a new pass — clarify with the same reviewer. An aborted pass never counted as recorded, so replacing an unusable reviewer needs no `--force`.
 
