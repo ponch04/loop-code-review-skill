@@ -158,14 +158,42 @@ def die(msg, code=1):
     sys.exit(code)
 
 
+def read_json(path):
+    """Parse one of this script's own JSON files. UTF-8, never the platform locale.
+
+    Every read and write of `state.json` and `project.json` goes through this pair. Passing
+    `encoding=` at each call site is the same fix written five times, and it was already
+    written unevenly: three sites kept the platform default while four had been corrected,
+    so a brief or a reviewer note with a non-ASCII character was decoded by whatever locale
+    the machine happened to have. Raises OSError/ValueError; the caller decides whether a
+    missing or broken file is fatal.
+    """
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def write_json(path, payload):
+    """Write JSON atomically: temp file beside it, fsync, then os.replace.
+
+    Atomic because a partial write costs the whole loop (see save()), and UTF-8 for the same
+    reason as read_json — the two must agree on the encoding whatever the machine's locale.
+    """
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+
+
 def load():
     if not os.path.exists(STATE_FILE):
         die("no active loop; run `init` first")
-    with open(STATE_FILE) as f:
-        try:
-            return json.load(f)
-        except ValueError as e:
-            die(f"{STATE_FILE} is not valid JSON ({e}); run `reset` and start the loop again")
+    try:
+        return read_json(STATE_FILE)
+    except ValueError as e:
+        die(f"{STATE_FILE} is not valid JSON ({e}); run `reset` and start the loop again")
 
 
 def save(state):
@@ -177,17 +205,7 @@ def save(state):
     history. os.replace is atomic on POSIX and Windows, so readers see either the old file
     or the new one, never a half-written one.
     """
-    atomic_json(STATE_FILE, state)
-
-
-def atomic_json(path, payload):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(payload, f, indent=2)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp, path)
+    write_json(STATE_FILE, state)
 
 
 def diff_base():
@@ -502,8 +520,7 @@ def cmd_init(a):
     # `reset` already refuses this exact situation; so does `project init`.
     if os.path.exists(PROJECT_FILE) and os.path.exists(STATE_FILE):
         try:
-            with open(PROJECT_FILE, encoding="utf-8") as f:
-                busy = next((x for x in json.load(f)["areas"] if x["status"] == "in_progress"), None)
+            busy = next((x for x in read_json(PROJECT_FILE)["areas"] if x["status"] == "in_progress"), None)
         except (OSError, ValueError, KeyError):
             busy = None
         if busy:
@@ -1093,14 +1110,12 @@ def cmd_reset(a):
     # with its passes, score and verdict all null. Refuse instead of losing the outcome.
     if os.path.exists(PROJECT_FILE) and os.path.exists(STATE_FILE):
         try:
-            with open(PROJECT_FILE, encoding="utf-8") as f:
-                busy = next((x for x in json.load(f)["areas"] if x["status"] == "in_progress"), None)
+            busy = next((x for x in read_json(PROJECT_FILE)["areas"] if x["status"] == "in_progress"), None)
         except (OSError, ValueError, KeyError):
             busy = None
         if busy:
             try:
-                with open(STATE_FILE, encoding="utf-8") as f:
-                    open_loop = json.load(f)
+                open_loop = read_json(STATE_FILE)
             except (OSError, ValueError):
                 open_loop = {}
             # Only that area's own loop is worth protecting. A loop from another scope holds
@@ -1126,8 +1141,7 @@ def cmd_reset(a):
     # failed commands.
     if os.path.exists(PROJECT_FILE):
         try:
-            with open(PROJECT_FILE, encoding="utf-8") as f:
-                stranded = next((x for x in json.load(f)["areas"] if x["status"] == "in_progress"), None)
+            stranded = next((x for x in read_json(PROJECT_FILE)["areas"] if x["status"] == "in_progress"), None)
         except (OSError, ValueError, KeyError):
             stranded = None
         print("note: a project ledger is still here; `project status` continues it, "
@@ -1152,16 +1166,15 @@ def cmd_reset(a):
 def load_project():
     if not os.path.exists(PROJECT_FILE):
         die("no project review; run `project init` first")
-    with open(PROJECT_FILE) as f:
-        try:
-            return json.load(f)
-        except ValueError as e:
-            die(f"{PROJECT_FILE} is not valid JSON ({e})")
+    try:
+        return read_json(PROJECT_FILE)
+    except ValueError as e:
+        die(f"{PROJECT_FILE} is not valid JSON ({e})")
 
 
 def save_project(p):
     """Atomic, for the same reason as save(): the ledger is the whole project review."""
-    atomic_json(PROJECT_FILE, p)
+    write_json(PROJECT_FILE, p)
 
 
 def area_paths(x):

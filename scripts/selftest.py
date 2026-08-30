@@ -809,6 +809,31 @@ def a_dangling_glue_operator_is_refused_at_either_end():
 
 
 @case
+def no_text_file_is_opened_at_the_mercy_of_the_platform_locale():
+    """`open()` without `encoding=` decodes by whatever locale the machine has.
+
+    The state files are the loop's whole memory and a brief or a reviewer note may hold any
+    character, so reading them under a non-UTF-8 locale is a corrupted state rather than a
+    clear error. The first pass at this fixed the call sites it happened to look at: four
+    carried `encoding="utf-8"` while `load`, `load_project` and the atomic write did not.
+    Binary mode is exempt — `fingerprint()` reads files as bytes precisely to avoid decoding.
+    """
+    src = _io.open(os.path.join(ROOT, "scripts", "loop_review.py"), encoding="utf-8").read()
+    bare = []
+    for node in ast.walk(ast.parse(src)):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                and node.func.id == "open"):
+            continue
+        if any(k.arg == "encoding" for k in node.keywords):
+            continue
+        mode = node.args[1] if len(node.args) > 1 else None
+        if isinstance(mode, ast.Constant) and "b" in mode.value:
+            continue
+        bare.append(node.lineno)
+    ok(not bare, "text open() without encoding= at line(s): " + ", ".join(map(str, bare)))
+
+
+@case
 def the_script_carries_no_unreachable_helper():
     """A helper nobody calls is a claim about the workflow that nothing enforces.
 
