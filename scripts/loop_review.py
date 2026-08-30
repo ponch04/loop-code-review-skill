@@ -80,6 +80,24 @@ MODES = ("changes", "project")
 
 # ---------- helpers ----------
 
+def user_path(v):
+    """argparse type for a path the user typed: resolved against the *caller's* cwd.
+
+    Every command chdirs to the repository root before it does anything, so a relative path
+    left as text means something different by the time it is used. `init` guarded its two
+    path arguments by hand and `brief` did not, which is the same defect twice: from a
+    subdirectory, `--task-brief-file brief.md` read a same-named file at the root and briefed
+    every reviewer of the loop with someone else's document, silently. Resolving at parse
+    time — before any chdir — makes the ordering inside command bodies stop mattering.
+    """
+    return os.path.abspath(v)
+
+
+def area_token(v):
+    """`project init` path, or the standalone `+` that glues two areas into one."""
+    return v if v == "+" else user_path(v)
+
+
 def positive_int(v):
     """argparse type: a count that must be at least 1."""
     try:
@@ -523,10 +541,9 @@ def cmd_init(a):
     if not a.paths:
         die("init needs at least one task-owned path after `--`")
     root = repo_root()
-    # Read the brief before the chdir below: a relative --task-brief-file names a file next
-    # to the caller, exactly like a scope path, and resolving it afterwards silently reads a
-    # same-named file at the repository root instead. Briefing every reviewer of the loop
-    # identically with the wrong document is worse than recording no brief at all.
+    # Path arguments arrive absolute (see `user_path`), so reading the brief here rather
+    # than after the chdir is no longer what keeps it correct — it just keeps the failure
+    # early, before a loop is written.
     brief = read_task_brief(a)
     # Deduplicate: `f.py ./f.py f.py` is one path. git would collapse it anyway, but the
     # list is echoed into the reviewer prompt and must read as the agent meant it.
@@ -1539,12 +1556,12 @@ def build_parser():
     p = argparse.ArgumentParser(prog="loop_review.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    s = sub.add_parser("init"); s.add_argument("--max-passes", type=positive_int, default=5); s.add_argument("--mode", choices=MODES, default="changes"); s.add_argument("--base", metavar="REF", help="commit to diff against (changes mode); use for already-committed work"); s.add_argument("--task-brief", metavar="TEXT", help="the task's requirements and acceptance criteria, for the reviewer — never rationale or suspected issues"); s.add_argument("--task-brief-file", metavar="PATH", help="same, read from a file"); s.add_argument("--scope-note", metavar="TEXT", help="hunk-level ownership the reviewer must be told, echoed every pass"); s.add_argument("--allow-empty", action="store_true", help="proceed on an empty scoped diff instead of reporting `no-changes`"); s.add_argument("--force", action="store_true"); s.add_argument("paths", nargs="*"); s.set_defaults(fn=cmd_init)
+    s = sub.add_parser("init"); s.add_argument("--max-passes", type=positive_int, default=5); s.add_argument("--mode", choices=MODES, default="changes"); s.add_argument("--base", metavar="REF", help="commit to diff against (changes mode); use for already-committed work"); s.add_argument("--task-brief", metavar="TEXT", help="the task's requirements and acceptance criteria, for the reviewer — never rationale or suspected issues"); s.add_argument("--task-brief-file", metavar="PATH", type=user_path, help="same, read from a file"); s.add_argument("--scope-note", metavar="TEXT", help="hunk-level ownership the reviewer must be told, echoed every pass"); s.add_argument("--allow-empty", action="store_true", help="proceed on an empty scoped diff instead of reporting `no-changes`"); s.add_argument("--force", action="store_true"); s.add_argument("paths", nargs="*", type=user_path); s.set_defaults(fn=cmd_init)
     s = sub.add_parser("validate"); s.add_argument("--none", action="store_true", help="record that no executable check applies (needs --reason)"); s.add_argument("--reason"); s.add_argument("command", nargs="*"); s.set_defaults(fn=cmd_validate)
-    s = sub.add_parser("scope"); s.add_argument("paths", nargs="*"); s.set_defaults(fn=cmd_scope)
+    s = sub.add_parser("scope"); s.add_argument("paths", nargs="*", type=user_path); s.set_defaults(fn=cmd_scope)
     s = sub.add_parser("validate-drop"); s.add_argument("--force", action="store_true"); s.add_argument("--reason"); s.add_argument("command", nargs="*"); s.set_defaults(fn=cmd_validate_drop)
     s = sub.add_parser("pass-start"); s.add_argument("--force", action="store_true"); s.set_defaults(fn=cmd_pass_start)
-    s = sub.add_parser("brief"); s.add_argument("--task-brief", metavar="TEXT"); s.add_argument("--task-brief-file", metavar="PATH"); s.add_argument("--scope-note", metavar="TEXT"); s.add_argument("--force", action="store_true"); s.set_defaults(fn=cmd_brief)
+    s = sub.add_parser("brief"); s.add_argument("--task-brief", metavar="TEXT"); s.add_argument("--task-brief-file", metavar="PATH", type=user_path); s.add_argument("--scope-note", metavar="TEXT"); s.add_argument("--force", action="store_true"); s.set_defaults(fn=cmd_brief)
     s = sub.add_parser("pass-abort"); s.add_argument("--reason"); s.set_defaults(fn=cmd_pass_abort)
     s = sub.add_parser("pass-record"); s.add_argument("--score", type=score_value); s.add_argument("--findings", type=nonneg_int, required=True); s.add_argument("--test-evidence", choices=TEST_EVIDENCE); s.add_argument("--understood", action="store_true"); s.add_argument("--test-score", type=score_value); s.add_argument("--note"); s.set_defaults(fn=cmd_pass_record)
     s = sub.add_parser("amend"); s.add_argument("--understood", action="store_true"); s.add_argument("--test-evidence", choices=TEST_EVIDENCE); s.add_argument("--score", type=score_value); s.add_argument("--findings", type=nonneg_int); s.add_argument("--test-score", type=score_value); s.add_argument("--note"); s.set_defaults(fn=cmd_amend)
@@ -1555,7 +1572,7 @@ def build_parser():
     s = sub.add_parser("reset"); s.add_argument("--project", action="store_true", help="also discard the project ledger"); s.set_defaults(fn=cmd_reset)
 
     pr = sub.add_parser("project").add_subparsers(dest="pcmd", required=True)
-    s = pr.add_parser("init"); s.add_argument("--max-passes", type=positive_int, default=5); s.add_argument("--report-only", action="store_true", help="collect findings per area without fixing"); s.add_argument("--allow-empty", action="store_true", help="queue areas that match no file"); s.add_argument("--force", action="store_true"); s.add_argument("paths", nargs="*"); s.set_defaults(fn=cmd_project_init)
+    s = pr.add_parser("init"); s.add_argument("--max-passes", type=positive_int, default=5); s.add_argument("--report-only", action="store_true", help="collect findings per area without fixing"); s.add_argument("--allow-empty", action="store_true", help="queue areas that match no file"); s.add_argument("--force", action="store_true"); s.add_argument("paths", nargs="*", type=area_token); s.set_defaults(fn=cmd_project_init)
     s = pr.add_parser("next"); s.set_defaults(fn=cmd_project_next)
     s = pr.add_parser("close"); s.add_argument("--force", action="store_true"); s.set_defaults(fn=cmd_project_close)
     s = pr.add_parser("status"); s.add_argument("--json", action="store_true"); s.set_defaults(fn=cmd_project_status)
