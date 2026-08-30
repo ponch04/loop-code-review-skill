@@ -10,6 +10,10 @@ never from `git status`. Aim for areas a single reviewer can actually read (a fe
 lines); split big packages by subdirectory, and order them so shared libraries come before
 their consumers. Show the list to the user once, then run without further questions.
 
+Neither `--task-brief` nor `--scope-note` applies here, and both commands refuse them: an
+inherited area has no task to satisfy and no task-owned hunks — every file under its paths is
+in scope, which is what makes it an area. The area prompt has no field for either.
+
 **Never include `.loop-review/`.** It holds this loop's state and earlier reviewers' findings,
 so an area containing it hands the next "fresh" reviewer the output of the last one — the one
 thing reviewer isolation exists to prevent.

@@ -363,6 +363,37 @@ def a_red_check_is_labelled_inherited_or_regressed():
 
 
 @case
+def project_mode_refuses_a_brief_and_a_scope_note_by_name():
+    """Both are changes-mode only, and both commands must say so about the flag given.
+
+    `brief` refused `--scope-note` with a message about `--task-brief`, so an operator could
+    not tell which was disallowed — while `init --mode project --scope-note` accepted the
+    same note, recorded it, and had `status` tell the agent to "repeat it verbatim in the
+    reviewer's hunk fields". `reviewer-prompt-area.md` has no such field: an area is in scope
+    whole. One command was refusing what the other invited across the isolation boundary.
+    """
+    d = repo({"pkg/a.py": "x\n"})
+    r = run("init", "--mode", "project", "--scope-note", "only the parser hunks", "--", "pkg", cwd=d)
+    ok(r.returncode != 0 and "--scope-note" in r.stderr,
+       f"init must refuse a scope note for an inherited area: rc={r.returncode} {r.stderr.strip()[:160]}")
+    run("init", "--mode", "project", "--", "pkg", cwd=d, check=True)
+    r = run("brief", "--scope-note", "only the parser hunks", cwd=d)
+    ok(r.returncode != 0 and "--scope-note" in r.stderr,
+       f"brief must name the flag it refuses: {r.stderr.strip()[:160]}")
+    r = run("brief", "--task-brief", "ship it", cwd=d)
+    ok(r.returncode != 0 and "--task-brief" in r.stderr,
+       f"and still refuse a brief: {r.stderr.strip()[:160]}")
+    st = json.load(_io.open(os.path.join(d, ".loop-review", "state.json"), encoding="utf-8"))
+    ok(st.get("scope_note") is None, f"nothing may have been recorded: {st.get('scope_note')!r}")
+
+    run("reset", cwd=d, check=True)                       # changes mode keeps both
+    write(d, "pkg/a.py", "y\n")
+    run("init", "--", "pkg", cwd=d, check=True)
+    out = run("brief", "--scope-note", "only the parser hunks", cwd=d, check=True).stdout
+    ok("only the parser hunks" in out, f"changes mode must still take a scope note: {out[:160]}")
+
+
+@case
 def a_run_that_moved_the_scope_cannot_make_a_later_failure_read_as_regressed():
     """A voided run is voided for every reader, provenance included.
 

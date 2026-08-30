@@ -575,6 +575,15 @@ def cmd_init(a):
         # An inherited area has no task and therefore no acceptance criteria to miss;
         # a brief here would only be the operator's opinion smuggled past isolation.
         die("--task-brief applies to --mode changes only")
+    if a.scope_note and a.mode == "project":
+        # A scope note says which hunks of a scoped file are task-owned. An area has no
+        # task-owned hunks: everything under its paths is in scope, which is what project
+        # mode means. `reviewer-prompt-area.md` has no field for one, so a note recorded
+        # here reaches nobody — while `status` still tells the agent to "repeat it verbatim
+        # in the reviewer's hunk fields", inviting a third channel across the isolation
+        # boundary. `brief` refuses it; init accepted it, and one of the two had to be wrong.
+        die("--scope-note applies to --mode changes only: an inherited area has no "
+            "task-owned hunks, every file under it is in scope")
     base = None
     if a.base:
         if a.mode == "project":
@@ -936,7 +945,14 @@ def cmd_brief(a):
     os.chdir(repo_root())
     state = load()
     if state.get("mode", "changes") == "project":
-        die("an inherited area has no task and no acceptance criteria; --task-brief is changes-mode only")
+        # Say which flag is being refused, not one the operator may never have typed: both
+        # are changes-mode only, for two different reasons, and a message about `--task-brief`
+        # left someone who passed `--scope-note` unable to tell whether it was allowed.
+        given = [flag for flag, used in (("--task-brief", a.task_brief or a.task_brief_file),
+                                         ("--scope-note", a.scope_note)) if used]
+        die(" and ".join(given or ["brief"]) + ": an inherited area has no task and no "
+            "acceptance criteria, and no task-owned hunks — every file under it is in "
+            "scope. Both are changes-mode only.")
     brief = read_task_brief(a)
     note = (a.scope_note or "").strip() or None
     if not brief and not note:
