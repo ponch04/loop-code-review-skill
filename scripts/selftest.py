@@ -1321,6 +1321,31 @@ def a_scope_path_git_cannot_see_is_reported():
 
 
 @case
+def an_invisible_scope_path_is_reported_for_the_reason_it_is_invisible():
+    """The warning is only useful if its reason is true.
+
+    Every existing path git could not see was reported as "ignored by git", so an empty
+    directory sent the operator hunting through a `.gitignore` that never mentioned it —
+    while the actual answer, that there is nothing in it yet, points at a completely
+    different fix. Same warning, three different things to do about it.
+    """
+    d = repo({"src/a.py": "1\n", ".gitignore": "ignored/\n"})
+    os.makedirs(os.path.join(d, "empty"))
+    os.makedirs(os.path.join(d, "ignored"))
+    write(d, "ignored/h.py", "y\n")
+    write(d, "src/a.py", "2\n")
+    err = run("init", "--", "src", "empty", "ignored", "nosuch", cwd=d, check=True).stderr
+    said = {p: next((l for l in err.splitlines() if f"`{p}`" in l), "") for p in
+            ("empty", "ignored", "nosuch")}
+    ok("empty directory" in said["empty"] and "ignored" not in said["empty"],
+       f"an empty directory must not be blamed on .gitignore: {said['empty']}")
+    ok("ignored by git" in said["ignored"],
+       f"a genuinely ignored path must still say so: {said['ignored']}")
+    ok("does not exist" in said["nosuch"], f"a missing path must say so: {said['nosuch']}")
+    ok("`src`" not in err, f"a path the fingerprint can see must not be warned about: {err}")
+
+
+@case
 def acceptance_refuses_by_name_for_each_of_the_four_conditions():
     """Each blocker proved on its own: a non-zero exit is also produced by the others."""
     def loop(d):

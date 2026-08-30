@@ -310,11 +310,31 @@ def unseen_paths(paths):
     the review "current". A path the operator named as task-owned must not be invisible to
     every gate without a word.
     """
+    def entries(p, exclude_ignored):
+        args = ["ls-files", "-z", "--cached", "--others"]
+        if exclude_ignored:
+            args.append("--exclude-standard")
+        return [x for x in git(*args, "--", p).split(b"\0") if x]
+
     out = []
     for p in paths:
-        listed = git("ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", p)
-        if not [x for x in listed.split(b"\0") if x and outside_state_dir(x)]:
-            out.append((p, "exists but is ignored by git" if os.path.exists(p) else "does not exist"))
+        if [x for x in entries(p, True) if outside_state_dir(x)]:
+            continue                                   # the fingerprint can see it
+        # Why it is invisible decides what the operator should do about it, so the reasons
+        # are told apart rather than guessed from `os.path.exists`. Calling an empty
+        # directory "ignored by git" sent them to a `.gitignore` that never mentioned it,
+        # when the real answer is that there is nothing in it yet.
+        everything = entries(p, False)
+        if not os.path.exists(p):
+            why = "does not exist"
+        elif not everything:
+            why = ("is an empty directory" if os.path.isdir(p)
+                   else "holds nothing git can see")
+        elif not [x for x in everything if outside_state_dir(x)]:
+            why = "holds only the loop's own state, which every scope excludes"
+        else:
+            why = "exists, but everything in it is ignored by git"
+        out.append((p, why))
     return out
 
 
