@@ -724,8 +724,15 @@ def cmd_validate_drop(a):
     hits = [v for v in state["validation"]
             if v["cmd"] == cmd and v["fingerprint"] == state["fingerprint_current"] and not v.get("retracted")]
     lp = last_recorded_pass(state)
-    inherited = (not hits and lp is not None and lp["fingerprint"] != state["fingerprint_current"]
-                 and cmd in validation_at(state, lp["fingerprint"]))
+    # Membership in the last pass's evidence set, decided on its own — *not* on whether the
+    # command also has a record here. Reading it as "no record here" left the rule open from
+    # the other side: running an inherited check so it fails to start (126/127) put it in the
+    # never-ran branch, where a plain `validate-drop` retired it and `pass-start` accepted the
+    # shrunken set. A check the review was granted on stays evidence even once the tool that
+    # ran it is gone; what changed is the environment, and that is the human's call to weigh.
+    prior = (validation_at(state, lp["fingerprint"])
+             if lp is not None and lp["fingerprint"] != state["fingerprint_current"] else {})
+    inherited = cmd in prior
     if not hits and not inherited:
         print(f"loop-review: no validation record for `{cmd}` at the current state", file=sys.stderr)
         cur = current_validation(state)
@@ -735,20 +742,26 @@ def cmd_validate_drop(a):
                 print(f"  - {v['cmd']}  -> exit {v['exit']}", file=sys.stderr)
         sys.exit(1)
     if inherited:
-        # A check carried over from the last pass, not re-run here. `pass-start` only opens
-        # a pass on green validation, so anything in that set passed — retiring it weakens
-        # the evidence the review was granted on, and that is a human call, never the
-        # agent's. The record itself is never rewritten: history stays append-only and the
-        # retirement is stamped on the state where it was decided.
+        # A check carried over from the last pass. `pass-start` only opens a pass on green
+        # validation, so anything in that set passed — retiring it weakens the evidence the
+        # review was granted on, and that is a human call, never the agent's.
         if not a.force:
-            die(f"`{cmd}` was green for pass {lp['n']} and has not been re-run on the current state; "
-                "re-run it, or retire it with --force (that weakens the evidence set)")
-        state["validation"].append({
-            "cmd": cmd, "exit": None, "at": now(), "fingerprint": state["fingerprint_current"],
-            "retracted": {"at": now(), "reason": a.reason or f"retired: inherited from pass {lp['n']}, not re-run"},
-        })
+            here = (f"it does not run here (exit {hits[-1]['exit']})" if hits
+                    else "it has not been re-run on the current state")
+            die(f"`{cmd}` was green for pass {lp['n']} and {here}; re-run it, "
+                "or retire it with --force (that weakens the evidence set)")
+        if hits:
+            for v in hits:
+                v["retracted"] = {"at": now(), "reason": a.reason or f"retired: inherited from pass {lp['n']}"}
+        else:
+            # No record here to mark, so the retirement is stamped as its own entry: history
+            # stays append-only and the decision belongs to the state where it was made.
+            state["validation"].append({
+                "cmd": cmd, "exit": None, "at": now(), "fingerprint": state["fingerprint_current"],
+                "retracted": {"at": now(), "reason": a.reason or f"retired: inherited from pass {lp['n']}, not re-run"},
+            })
         save(state)
-        print(f"retired `{cmd}` — inherited from pass {lp['n']}, not re-run on this state")
+        print(f"retired `{cmd}` — inherited from pass {lp['n']}")
         print_validation(current_validation(state), state=state)
         return
     ran = [v for v in hits if v["exit"] not in NEVER_RAN]
@@ -793,9 +806,19 @@ def cmd_pass_start(a):
     # and tell a fresh reviewer that the area's own checks fail. Refuse in every mode.
     never_ran = [v for v in red if v["exit"] in NEVER_RAN]
     if never_ran:
+        # Two different exits, and naming the wrong one is how the gate got walked around:
+        # a check the last pass rested on is still evidence once its tool disappears, so
+        # retiring it needs `--force`; only a command no pass leaned on clears for free.
+        lrp = last_recorded_pass(state)
+        prior = (validation_at(state, lrp["fingerprint"])
+                 if lrp is not None and lrp["fingerprint"] != state["fingerprint_current"] else {})
+        carried = [v["cmd"] for v in never_ran if v["cmd"] in prior]
         die("these command(s) never ran (missing tool or typo), so they are evidence about "
             "nothing: " + "; ".join(f"`{v['cmd']}` (exit {v['exit']})" for v in never_ran)
-            + " — fix the command and re-run it, or retract the record with `validate-drop`.")
+            + " — fix the command and re-run it, or retract the record with `validate-drop`."
+            + (" Note that " + "; ".join(f"`{c}`" for c in carried)
+               + " carried the last pass, so retiring it takes `validate-drop --force`, "
+                 "a human decision." if carried else ""))
     if red and state.get("mode", "changes") != "project":
         die("validation is red for the current state; fix it, or re-run the command if the failure was environmental "
             "(if it never ran at all — typo, missing tool — retract it with `validate-drop`)")
@@ -821,9 +844,10 @@ def cmd_pass_start(a):
     if missing and not a.force:
         die(f"pass {lp['n']} rested on {len(missing)} check(s) not re-run since the change: "
             + "; ".join(f"`{c}`" for c in missing)
-            + " — re-run them. A check that never ran here (typo, missing tool) can be retracted with "
-              "`validate-drop`; retiring one that was green for the last pass needs "
-              "`validate-drop --force`, a human decision.")
+            + " — re-run them. Retiring one of these weakens the evidence this review rests on, "
+              "even if the tool that ran it is gone, so it needs `validate-drop --force` — "
+              "a human decision. (Plain `validate-drop` only clears a command that never ran "
+              "here and no pass rested on.)")
     entry = {"n": n, "opened": now(), "fingerprint": state["fingerprint_current"], "result": None}
     if red:
         entry["opened_over_red"] = [v["cmd"] for v in red]
