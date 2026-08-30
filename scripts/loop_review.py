@@ -1333,27 +1333,15 @@ def cmd_project_next(a):
         print("report-only: record the pass, write the findings file, then `project close` — do not fix")
 
 
-def findings_digest(ffile):
-    """Hash of the findings file, or None when there is none. Content, never mtime.
-
-    Timestamps are the obvious way to ask "was this written during this loop?" and the wrong
-    one: `now()` has one-second resolution and a whole area can open and close inside that
-    second, so the comparison silently passes exactly when the runs are back to back.
-    """
-    try:
-        with open(ffile, "rb") as f:
-            return hashlib.sha256(f.read()).hexdigest()
-    except OSError:
-        return None
-
-
 def findings_are_current(ffile, area):
     """True when a findings file exists for this review.
 
     `project next` moves any previous review's file to `<slug>.prev.md`, so anything at this
     path was written during this area's current loop. The path repeats on every review of an
     area, and without that move a leftover file satisfied the gate while this run's findings
-    died with `state.json`.
+    died with `state.json`. Do not reach for a timestamp instead: `now()` has one-second
+    resolution and a whole area can open and close inside that second, so the comparison
+    passes exactly when the runs are back to back.
     """
     return os.path.exists(ffile)
 
