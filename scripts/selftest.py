@@ -1321,6 +1321,59 @@ def a_scope_path_git_cannot_see_is_reported():
 
 
 @case
+def a_path_argument_is_read_from_the_directory_the_operator_stood_in():
+    """Every command chdirs to the repository root, so a relative argument must be resolved
+    before that — for all of them, not the ones somebody remembered.
+
+    `init` read its brief before the chdir on purpose; `brief` did not, and from a
+    subdirectory `--task-brief-file brief.md` quietly opened a same-named file at the root.
+    The failure is silent and total: the loop is briefed with someone else's document, and
+    every reviewer of every pass is then told the wrong acceptance criteria.
+    """
+    d = repo({"sub/f.py": "1\n", "brief.md": "ROOT DECOY\n", "sub/brief.md": "REAL BRIEF\n"})
+    write(d, "sub/f.py", "2\n")
+    sub = os.path.join(d, "sub")
+    run("init", "--", "f.py", cwd=sub, check=True)
+    out = run("brief", "--task-brief-file", "brief.md", cwd=sub, check=True).stdout
+    ok("REAL BRIEF" in out and "DECOY" not in out,
+       f"the brief must come from the caller's directory: {out.strip()[:160]}")
+    st = json.load(_io.open(os.path.join(d, ".loop-review", "state.json"), encoding="utf-8"))
+    ok(st["scope"] == ["sub/f.py"], f"and a scope path is resolved the same way: {st['scope']}")
+    r = run("brief", "--force", "--task-brief-file", "nosuch.md", cwd=sub)
+    ok(r.returncode != 0 and "nosuch.md" in r.stderr,
+       f"a missing file must be named, not silently replaced: {r.stderr.strip()[:160]}")
+
+    run("reset", cwd=sub, check=True)
+    r = run("project", "init", "--", "f.py", "+", "brief.md", cwd=sub, check=True)
+    led = json.load(_io.open(os.path.join(d, ".loop-review", "project.json"), encoding="utf-8"))
+    ok([x["paths"] for x in led["areas"]] == [["sub/f.py", "sub/brief.md"]],
+       f"`+` must survive path resolution and still glue: {[x['paths'] for x in led['areas']]}")
+
+
+@case
+def every_path_argument_is_declared_with_a_resolving_type():
+    """The rule lives in the parser, so that is where it is checked.
+
+    Resolving paths inside command bodies is what drifted: two commands did it, a third did
+    not, and nothing said so. A `paths` positional or a `*_file` flag declared without
+    `user_path`/`area_token` is that drift starting again.
+    """
+    src = _io.open(os.path.join(ROOT, "scripts", "loop_review.py"), encoding="utf-8").read()
+    bad = []
+    for node in ast.walk(ast.parse(src)):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "add_argument" and node.args):
+            continue
+        name = node.args[0].value if isinstance(node.args[0], ast.Constant) else ""
+        if not (name == "paths" or name.endswith("-file")):
+            continue
+        typ = next((k.value for k in node.keywords if k.arg == "type"), None)
+        if not (isinstance(typ, ast.Name) and typ.id in ("user_path", "area_token")):
+            bad.append(f"{name} at line {node.lineno}")
+    ok(not bad, "path argument(s) declared without a resolving type: " + "; ".join(bad))
+
+
+@case
 def an_invisible_scope_path_is_reported_for_the_reason_it_is_invisible():
     """The warning is only useful if its reason is true.
 
