@@ -658,7 +658,7 @@ def cmd_init(a):
     print(f"loop initialised ({a.mode}{' vs ' + a.base if a.base else ''}): {len(scope)} path(s), max {a.max_passes} passes, fingerprint {state['fingerprint_current']}")
     for p in scope:
         print(f"  - {p}")
-    print_task_brief(state)
+    print_loop_context(state)
 
 
 def brief_flags_given(a):
@@ -699,6 +699,19 @@ def read_task_brief(a):
     if a.task_brief:
         return a.task_brief.strip() or None
     return None
+
+
+def print_loop_context(state):
+    """Echo everything of the loop's own context that reaches the reviewer: brief, then note.
+
+    Those two are the only things that cross into the reviewer's prompt, so every command
+    that shows the loop's context must show both. Printed by hand at four sites, one of them
+    — `init`, the command that records them — printed the brief and dropped the note: a
+    `--scope-note` given at init was stored and never confirmed, and an agent filling the
+    prompt from that output had no reason to think a note existed at all.
+    """
+    print_task_brief(state)
+    print_scope_note(state)
 
 
 def print_scope_note(state):
@@ -993,8 +1006,7 @@ def cmd_pass_start(a):
     print("scope:")
     for p in state["scope"]:
         print(f"  - {p}")
-    print_task_brief(state)
-    print_scope_note(state)
+    print_loop_context(state)
     print_validation(cur, "validation for this state", state)
 
 
@@ -1030,8 +1042,7 @@ def cmd_brief(a):
                 "been reviewed against different terms than earlier ones")
         state[field] = value
     save(state)
-    print_task_brief(state)
-    print_scope_note(state)
+    print_loop_context(state)
 
 
 def cmd_pass_abort(a):
@@ -1212,8 +1223,7 @@ def cmd_status(a):
     print(f"mode: {state.get('mode', 'changes')}" + (f" vs {state['base']}" if state.get("base") else ""))
     print(f"repository: {os.getcwd()}")
     print(f"scope ({len(state['scope'])}): " + ", ".join(state["scope"]))
-    print_task_brief(state)
-    print_scope_note(state)
+    print_loop_context(state)
     print(f"passes: {len(state['passes'])}/{state['max_passes']}")
     for p in state["passes"]:
         r = p.get("result")
