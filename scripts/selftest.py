@@ -363,6 +363,49 @@ def a_red_check_is_labelled_inherited_or_regressed():
 
 
 @case
+def every_closed_ledger_row_has_the_same_shape():
+    """`project.json` is the deliverable of a project review, so its rows are a schema.
+
+    Three paths settle an area that produced no usable review, and each wrote the row out by
+    hand. One drifted: the lost-state branch left `test_evidence` and `understood` unset, so
+    a consumer indexing rows by key hit a KeyError on exactly the areas that had gone wrong,
+    and the ledger reported two different shapes for one outcome.
+    """
+    d = repo({"ok/f.py": "x\n", "gone/f.py": "x\n", "lost/f.py": "x\n", "foreign/f.py": "x\n"})
+    run("project", "init", "--report-only", "--", "ok", "gone", "lost", "foreign", cwd=d, check=True)
+    out = run("project", "next", cwd=d, check=True).stdout          # 1. a clean review
+    stem = out.split("findings file: ")[1].splitlines()[0]
+    pass_through(d, "9.5", "0", "trusted")
+    _io.open(os.path.join(d, stem), "w").write("A. no actionable findings\n")
+    run("project", "close", cwd=d, check=True)
+
+    sh("git rm -q -r gone && git commit -qm drop", d)               # 2. files gone
+    run("project", "next", cwd=d)
+
+    run("project", "next", cwd=d, check=True)                       # 3. loop state lost
+    os.remove(os.path.join(d, ".loop-review", "state.json"))
+    run("project", "close", "--force", cwd=d, check=True)
+
+    run("project", "next", cwd=d, check=True)                       # 4. a foreign loop
+    sf = os.path.join(d, ".loop-review", "state.json")
+    st = json.load(_io.open(sf, encoding="utf-8"))
+    st["scope"] = ["ok"]
+    json.dump(st, _io.open(sf, "w", encoding="utf-8"), indent=2)
+    run("project", "close", "--force", cwd=d, check=True)
+
+    rows = [a for a in json.load(_io.open(os.path.join(d, ".loop-review", "project.json"),
+                                          encoding="utf-8"))["areas"]
+            if a["status"] not in ("pending", "in_progress")]
+    ok(len(rows) == 4, f"the fixture must exercise all four settle paths, got {len(rows)}")
+    shapes = {tuple(sorted(a)) for a in rows}
+    ok(len(shapes) == 1,
+       "closed rows differ in shape: " + "; ".join(str(set(a) ^ set(rows[0])) for a in rows
+                                                   if set(a) != set(rows[0])))
+    for key in ("test_evidence", "understood", "findings_file", "passes", "score"):
+        ok(all(key in a for a in rows), f"every closed row must carry `{key}`")
+
+
+@case
 def the_ledger_never_prints_a_metric_the_area_does_not_have():
     """`project status` is the deliverable of a project review — it has to read as a report.
 

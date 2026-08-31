@@ -1351,6 +1351,21 @@ def parse_areas(raw, root):
     return out
 
 
+def settle_area(area, blockers, passes=None):
+    """Record an area that produced no usable review, with every metric explicitly absent.
+
+    Three paths reach this outcome — an area whose files are gone, one whose loop state was
+    lost, one whose open loop belongs to somewhere else — and each spelled the row out by
+    hand until one drifted: the lost-state branch left `test_evidence` and `understood`
+    unset, so the ledger, which is the deliverable of a project review, held rows of two
+    different shapes and a consumer indexing them by key hit a KeyError on exactly the areas
+    that went wrong.
+    """
+    area.update({"status": "incomplete", "closed": now(), "blockers": blockers,
+                 "passes": passes, "findings": None, "resolved": None, "score": None,
+                 "test_evidence": None, "understood": None, "findings_file": None})
+
+
 def cmd_project_init(a):
     """Queue a whole-project review, one loop per area, in order.
 
@@ -1423,10 +1438,7 @@ def cmd_project_next(a):
         # remaining area unreachable — the opposite of "never stop the project on one stuck
         # area", and unrecoverable except by rebuilding the ledger and losing the outcomes
         # already earned.
-        nxt.update({"status": "incomplete", "closed": now(),
-                    "blockers": ["area matches no file — path renamed, deleted or mistyped"],
-                    "passes": 0, "findings": None, "resolved": None, "score": None,
-                    "test_evidence": None, "understood": None, "findings_file": None})
+        settle_area(nxt, ["area matches no file — path renamed, deleted or mistyped"], passes=0)
         save_project(p)
         left = sum(1 for x in p["areas"] if x["status"] == "pending")
         print(f"area `{area_name(nxt)}` matches no file — recorded incomplete; "
@@ -1483,8 +1495,7 @@ def cmd_project_close(a):
         if not a.force:
             die("no loop state for the current area — it was lost mid-loop; "
                 "`project close --force` marks it incomplete and continues the queue")
-        cur.update({"status": "incomplete", "blockers": ["loop state lost mid-area"], "closed": now(),
-                    "passes": None, "findings": None, "resolved": None, "score": None, "findings_file": None})
+        settle_area(cur, ["loop state lost mid-area"])
         save_project(p)
         print(f"area `{area_name(cur)}` closed: incomplete — loop state lost")
         return
@@ -1500,10 +1511,7 @@ def cmd_project_close(a):
         # Settle the area from what is known — nothing — and do not touch the foreign loop:
         # it is some other review's whole history, and this command has no claim on it. The
         # area stays in the ledger, visible for a re-run.
-        cur.update({"status": "incomplete", "closed": now(),
-                    "blockers": ["the open loop belongs to another scope; this area was never reviewed"],
-                    "passes": None, "findings": None, "resolved": None, "score": None,
-                    "test_evidence": None, "understood": None, "findings_file": None})
+        settle_area(cur, ["the open loop belongs to another scope; this area was never reviewed"])
         save_project(p)
         print(f"area `{area_name(cur)}` closed: incomplete — the open loop is not this area's")
         print(f"note: {STATE_FILE} was left untouched; `reset` discards it when that loop is done",
