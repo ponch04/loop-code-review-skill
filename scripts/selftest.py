@@ -1682,6 +1682,25 @@ def every_command_the_script_recommends_exists_in_the_cli():
 
 
 @case
+def the_second_passport_name_stays_a_link_never_a_copy():
+    """One passport, two runtime names — and the difference is load-bearing.
+
+    Claude Code reads `CLAUDE.md`, Codex reads `AGENTS.md`, and a symlink answers both from
+    one file. Materialise it into a real copy and the two drift the first time either is
+    edited; it also makes the duplication read as a defect to anyone diffing contents, which
+    is how the same non-issue was filed three times. The mode in the index is the fact — the
+    working tree may not support links at all.
+    """
+    entry = subprocess.run(["git", "ls-files", "-s", "CLAUDE.md"], cwd=ROOT,
+                           capture_output=True, text=True).stdout.split()
+    ok(entry and entry[0] == "120000",
+       f"CLAUDE.md must be a symlink in the index, got mode {entry[0] if entry else 'missing'}")
+    target = subprocess.run(["git", "cat-file", "-p", entry[1]], cwd=ROOT,
+                            capture_output=True, text=True).stdout.strip()
+    ok(target == "AGENTS.md", f"and it must point at the passport, not {target!r}")
+
+
+@case
 def the_prose_never_invokes_the_script_by_a_repo_relative_path():
     """SKILL.md itself forbids it: the reviewed repository need not have a scripts/ at all,
     and if it does, that copy is a different one.
