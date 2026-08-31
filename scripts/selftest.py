@@ -750,6 +750,37 @@ def accept_reports_the_pass_limit_even_when_every_pass_was_aborted():
 
 
 @case
+def no_command_edits_a_recorded_pass_while_a_newer_one_is_open():
+    """`amend` and `resolve` both mutate the last recorded pass, so both must refuse.
+
+    `amend` was taught to; `resolve` was not, and moved `resolved` and the resolution log
+    onto a record no gate consults any more — then advised opening a new pass, which was
+    already open. Each is asserted by the blocker it prints, not by a non-zero exit: they
+    have several refusals apiece, and any of the others would satisfy a code-only check.
+    """
+    d = repo({"src/a.py": "1\n"})
+    write(d, "src/a.py", "2\n")
+    run("init", "--", "src", cwd=d, check=True)
+    pass_through(d, "7", "2", "trusted")
+    write(d, "src/a.py", "3\n")
+    run("validate", "--", "true", cwd=d)
+    run("pass-start", cwd=d, check=True)                   # pass 2 open
+
+    for cmd in (("resolve", "--fixed", "2"), ("amend", "--score", "9.5")):
+        r = run(*cmd, cwd=d)
+        ok(r.returncode != 0 and "pass 2 is open" in r.stderr,
+           f"`{cmd[0]}` must refuse while a newer pass is open: rc={r.returncode} {r.stderr.strip()[:160]}")
+    st = json.load(_io.open(os.path.join(d, ".loop-review", "state.json"), encoding="utf-8"))
+    r1 = st["passes"][0]["result"]
+    ok(r1["resolved"] == 0 and "resolution_log" not in r1,
+       f"and the superseded pass must be untouched: {r1}")
+
+    run("pass-abort", "--reason", "fixture", cwd=d, check=True)
+    ok(run("resolve", "--fixed", "2", cwd=d).returncode == 0,
+       "with no pass open, the documented order still works")
+
+
+@case
 def amend_refuses_while_a_newer_pass_is_open():
     """`amend` edits the last *recorded* pass, so an open one makes its target the wrong pass.
 

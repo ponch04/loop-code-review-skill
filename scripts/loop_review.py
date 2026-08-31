@@ -1150,6 +1150,26 @@ def cmd_pass_record(a):
         print("note: score below 9.5 with zero findings — treat the number as calibration noise; findings control the loop")
 
 
+def require_recorded_pass(state, action, missing):
+    """The last recorded pass, refused while a newer pass is open.
+
+    `amend` and `resolve` both mutate that pass, and with a newer one open the pass they
+    reach is the one it supersedes: the edit lands on a record no gate consults any more,
+    while the output or the fix batch in the operator's hands belongs to the open review.
+    `amend` learned to refuse; `resolve` did not, and silently moved `resolved` and the
+    resolution log onto the dead record — then advised opening a new pass, which was already
+    open. One guard, so the next command that edits a recorded pass cannot forget.
+    """
+    op = open_pass(state)
+    if op is not None:
+        die(f"pass {op['n']} is open — `pass-record` states its verdict, `pass-abort` "
+            f"discards it. `{action}` edits the last recorded pass, which that one supersedes.")
+    lp = last_recorded_pass(state)
+    if lp is None:
+        die(missing)
+    return lp
+
+
 def cmd_amend(a):
     """Add output the reviewer supplied on request, without opening a new pass.
 
@@ -1164,17 +1184,7 @@ def cmd_amend(a):
     """
     os.chdir(repo_root())
     state = load()
-    op = open_pass(state)
-    if op is not None:
-        # `amend` edits the last *recorded* pass, so with a newer pass open it silently
-        # rewrote a review the open one supersedes — while the output the operator was
-        # holding almost certainly belonged to the open pass. Nothing gates on a superseded
-        # record either, so the edit changed nothing except what `status` reports.
-        die(f"pass {op['n']} is open — `pass-record` states its verdict, `pass-abort` "
-            "discards it. `amend` only edits the last recorded pass, which that one supersedes.")
-    lp = last_recorded_pass(state)
-    if lp is None:
-        die("no recorded pass to amend")
+    lp = require_recorded_pass(state, "amend", "no recorded pass to amend")
     r = lp["result"]
     given = {k: v for k, v in (("score", a.score), ("findings", a.findings),
                                ("test_evidence", a.test_evidence),
@@ -1202,9 +1212,7 @@ def cmd_amend(a):
 def cmd_resolve(a):
     os.chdir(repo_root())
     state = load()
-    lp = last_recorded_pass(state)
-    if lp is None:
-        die("no recorded pass to resolve against")
+    lp = require_recorded_pass(state, "resolve", "no recorded pass to resolve against")
     counts = (("--fixed", a.fixed), ("--withdrawn", a.withdrawn), ("--adjudicated-invalid", a.adjudicated_invalid))
     # Each flag counts something that happened, so it cannot be negative, and a call that
     # reports nothing is a no-op that would still land in the log as a resolution step.
