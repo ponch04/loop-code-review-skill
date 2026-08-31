@@ -61,6 +61,32 @@ def sh(cmd, cwd):
 REPOS = []
 
 
+def read_text(path):
+    """Read a text file as UTF-8, never as whatever the machine's locale happens to be.
+
+    The suite is where the surrogate and non-UTF-8 paths are exercised, so its own I/O has to
+    be the one thing that does not depend on the locale: under `LC_ALL=C` the fixtures read
+    `state.json` and the ledger through an ASCII codec and fail on content the product
+    handles correctly, which reads as a defect in the product.
+    """
+    with open(path, encoding="utf-8") as f:
+        return f.read()
+
+
+def write_text(path, text):
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text)
+
+
+def read_state(d, name="state.json"):
+    """The loop state or the project ledger of fixture repo `d`, parsed."""
+    return json.loads(read_text(os.path.join(d, ".loop-review", name)))
+
+
+def write_state(d, obj, name="state.json"):
+    write_text(os.path.join(d, ".loop-review", name), json.dumps(obj, indent=2))
+
+
 def repo(files=None, commit=True):
     d = tempfile.mkdtemp(prefix="loop-selftest-")
     REPOS.append(d)
@@ -68,16 +94,14 @@ def repo(files=None, commit=True):
     for name, body in (files or {"a.py": "v1\n"}).items():
         path = os.path.join(d, name)
         os.makedirs(os.path.dirname(path), exist_ok=True) if os.path.dirname(name) else None
-        with open(path, "w") as f:
-            f.write(body)
+        write_text(path, body)
     if commit:
         sh("git add -A && git commit -qm init", d)
     return d
 
 
 def write(d, name, body):
-    with open(os.path.join(d, name), "w") as f:
-        f.write(body)
+    write_text(os.path.join(d, name), body)
 
 
 def findings(d, slug, text="A. review\nB. understood\nC. trusted\nD. 9.5\n"):
@@ -98,7 +122,7 @@ def findings(d, slug, text="A. review\nB. understood\nC. trusted\nD. 9.5\n"):
     ledger = os.path.join(d, ".loop-review", "project.json")
     area = None
     if os.path.exists(ledger):
-        areas = json.load(_io.open(ledger, encoding="utf-8"))["areas"]
+        areas = json.loads(read_text(ledger))["areas"]
         area = next((x for x in areas if x["status"] == "in_progress"), None)
     if area is not None:
         name = module().area_slug(area) + ".md"
@@ -111,8 +135,7 @@ def findings(d, slug, text="A. review\nB. understood\nC. trusted\nD. 9.5\n"):
         if not hit:
             raise AssertionError(f"findings(): no area in progress and no file for `{slug}`")
         name = hit[0]
-    with open(os.path.join(fdir, name), "w", encoding="utf-8") as f:
-        f.write(text)
+    write_text(os.path.join(fdir, name), text)
 
 
 def pass_through(d, score="9.5", findings="0", evidence="trusted", understood=True):
@@ -191,7 +214,7 @@ def an_area_emptied_after_queueing_is_refused_at_open():
     sh("git rm -q -r gone && git commit -qm drop", d)
     r = run("project", "next", cwd=d)
     ok(r.returncode == 2, "an area that lost its files must not open a loop")
-    st = json.load(open(os.path.join(d, ".loop-review", "project.json")))
+    st = json.loads(read_text(os.path.join(d, ".loop-review", "project.json")))
     ok(st["areas"][1]["status"] == "incomplete" and st["areas"][1]["blockers"],
        f"it must be recorded incomplete with its blocker, got {st['areas'][1]['status']}")
 
@@ -209,12 +232,12 @@ def an_areas_row_is_closed_only_from_the_loop_that_area_opened():
     run("project", "init", "--report-only", "--", "pkg/a", "pkg/b", cwd=d, check=True)
     stem = run("project", "next", cwd=d, check=True).stdout.split("findings file: ")[1].splitlines()[0]
     sf = os.path.join(d, ".loop-review", "state.json")
-    st = json.load(_io.open(sf, encoding="utf-8"))
+    st = json.loads(read_text(sf))
     st["area"] = ["pkg/a", "pkg/b"]                    # a loop opened for a different area
     st["scope"] = ["pkg/a", "pkg/b"]
-    json.dump(st, _io.open(sf, "w", encoding="utf-8"), indent=2)
+    write_text(sf, json.dumps(st, indent=2))
     pass_through(d, "9.5", "0", "trusted")
-    _io.open(os.path.join(d, stem), "w").write("A. no actionable findings\n")
+    write_text(os.path.join(d, stem), "A. no actionable findings\n")
     r = run("project", "close", cwd=d)
     ok(r.returncode != 0 and "not area" in r.stderr,
        f"a wider loop from elsewhere must not close this row: rc={r.returncode} {r.stderr.strip()[:160]}")
@@ -225,10 +248,9 @@ def an_areas_row_is_closed_only_from_the_loop_that_area_opened():
     stem = run("project", "next", cwd=d, check=True).stdout.split("findings file: ")[1].splitlines()[0]
     run("scope", "--", "pkg/b", cwd=d, check=True)     # this area's own loop, widened
     pass_through(d, "9.5", "0", "trusted")
-    _io.open(os.path.join(d, stem), "w").write("A. no actionable findings\n")
+    write_text(os.path.join(d, stem), "A. no actionable findings\n")
     run("project", "close", cwd=d, check=True)
-    area = json.load(_io.open(os.path.join(d, ".loop-review", "project.json"),
-                              encoding="utf-8"))["areas"][0]
+    area = json.loads(read_text(os.path.join(d, ".loop-review", "project.json")))["areas"][0]
     ok(area["status"] == "reviewed" and area.get("reviewed_paths") == ["pkg/a", "pkg/b"],
        f"a widened loop is still this area's: {area['status']}, {area.get('reviewed_paths')}")
 
@@ -247,11 +269,11 @@ def a_foreign_loop_never_traps_the_area_that_did_not_open_it():
     run("project", "init", "--", "a", "b", cwd=d, check=True)
     run("project", "next", cwd=d, check=True)
     sf = os.path.join(d, ".loop-review", "state.json")
-    st = json.load(open(sf))
+    st = json.loads(read_text(sf))
     # A loop opened for another area. `area` is the identity — forging `scope` alone would
     # only look like this area's own loop after a legitimate `scope --` widening.
     st["area"] = st["scope"] = ["b"]
-    json.dump(st, open(sf, "w"), indent=2)
+    write_text(sf, json.dumps(st, indent=2))
 
     r = run("project", "close", cwd=d)
     ok(r.returncode != 0 and "not area" in r.stderr,
@@ -261,7 +283,7 @@ def a_foreign_loop_never_traps_the_area_that_did_not_open_it():
 
     r = run("project", "close", "--force", cwd=d)
     ok(r.returncode == 0, f"--force must settle the area, got rc={r.returncode}: {r.stderr.strip()[:160]}")
-    led = json.load(open(os.path.join(d, ".loop-review", "project.json")))
+    led = json.loads(read_text(os.path.join(d, ".loop-review", "project.json")))
     ok(led["areas"][0]["status"] == "incomplete" and led["areas"][0]["blockers"],
        f"the unreviewed area must be recorded incomplete with its blocker: {led['areas'][0]}")
     ok(os.path.exists(sf), "the foreign loop must be left untouched — it is another review's history")
@@ -301,7 +323,7 @@ def a_refused_area_does_not_block_the_areas_behind_it():
     r = run("project", "next", cwd=d)                  # must reach `c`, not the same one
     ok(r.returncode == 0 and "c" in r.stdout,
        f"the queue must advance past a refused area, got rc={r.returncode}: {r.stdout.strip()[:120]}")
-    st = json.load(open(os.path.join(d, ".loop-review", "project.json")))
+    st = json.loads(read_text(os.path.join(d, ".loop-review", "project.json")))
     ok([x["status"] for x in st["areas"]] == ["reviewed", "incomplete", "in_progress"],
        f"ledger: {[x['status'] for x in st['areas']]}")
 
@@ -326,8 +348,7 @@ def a_deeply_nested_area_is_fingerprinted_by_its_tracked_files():
     pass_through(d, "9.5", "0", "trusted")
     # This area's slug flattens `packages/domain`, which the helper cannot reconstruct from
     # the stem alone — take the path the script itself printed.
-    with open(os.path.join(d, ffile), "w") as f:
-        f.write("clean\n")
+    write_text(os.path.join(d, ffile), "clean\n")
     run("project", "close", cwd=d, check=True)
     out = run("project", "next", cwd=d, check=True).stdout
     before = out.split("fingerprint ")[1].split(")")[0].strip()
@@ -382,7 +403,7 @@ def a_fix_mode_area_reviews_over_inherited_red_but_never_accepts_over_it():
     ok(run("accept", cwd=d).returncode != 0, "accept must still refuse over red validation")
     findings(d, "pkg")
     run("project", "close", cwd=d, check=True)
-    led = json.load(open(os.path.join(d, ".loop-review", "project.json")))["areas"][0]
+    led = json.loads(read_text(os.path.join(d, ".loop-review", "project.json")))["areas"][0]
     ok(led["status"] == "incomplete" and any("red" in b for b in led["blockers"]),
        f"the area must close incomplete naming the red check, got {led}")
     d2 = repo()
@@ -437,8 +458,7 @@ def a_nested_area_closes_on_the_findings_file_the_script_names():
        f"the helper must write the file the script named: {written} vs {printed}")
     r = run("project", "close", cwd=d)
     ok(r.returncode == 0, f"and the close must find it: {r.stderr.strip()[:160]}")
-    area = json.load(_io.open(os.path.join(d, ".loop-review", "project.json"),
-                              encoding="utf-8"))["areas"][0]
+    area = json.loads(read_text(os.path.join(d, ".loop-review", "project.json")))["areas"][0]
     ok(area["status"] == "reviewed" and area["findings_file"],
        f"the ledger must record the surviving report: {area['status']}, {area['findings_file']}")
 
@@ -457,7 +477,7 @@ def every_closed_ledger_row_has_the_same_shape():
     out = run("project", "next", cwd=d, check=True).stdout          # 1. a clean review
     stem = out.split("findings file: ")[1].splitlines()[0]
     pass_through(d, "9.5", "0", "trusted")
-    _io.open(os.path.join(d, stem), "w").write("A. no actionable findings\n")
+    write_text(os.path.join(d, stem), "A. no actionable findings\n")
     run("project", "close", cwd=d, check=True)
 
     sh("git rm -q -r gone && git commit -qm drop", d)               # 2. files gone
@@ -469,13 +489,12 @@ def every_closed_ledger_row_has_the_same_shape():
 
     run("project", "next", cwd=d, check=True)                       # 4. a foreign loop
     sf = os.path.join(d, ".loop-review", "state.json")
-    st = json.load(_io.open(sf, encoding="utf-8"))
+    st = json.loads(read_text(sf))
     st["area"] = st["scope"] = ["ok"]                  # a loop belonging to another area
-    json.dump(st, _io.open(sf, "w", encoding="utf-8"), indent=2)
+    write_text(sf, json.dumps(st, indent=2))
     run("project", "close", "--force", cwd=d, check=True)
 
-    rows = [a for a in json.load(_io.open(os.path.join(d, ".loop-review", "project.json"),
-                                          encoding="utf-8"))["areas"]
+    rows = [a for a in json.loads(read_text(os.path.join(d, ".loop-review", "project.json")))["areas"]
             if a["status"] not in ("pending", "in_progress")]
     ok(len(rows) == 4, f"the fixture must exercise all four settle paths, got {len(rows)}")
     shapes = {tuple(sorted(a)) for a in rows}
@@ -500,7 +519,7 @@ def the_ledger_never_prints_a_metric_the_area_does_not_have():
     out = run("project", "next", cwd=d, check=True).stdout
     stem = out.split("findings file: ")[1].splitlines()[0]
     pass_through(d, "9.5", "0", "trusted")
-    _io.open(os.path.join(d, stem), "w").write("A. no actionable findings\n")
+    write_text(os.path.join(d, stem), "A. no actionable findings\n")
     run("project", "close", cwd=d, check=True)
     sh("git rm -q -r gone && git commit -qm drop", d)
     run("project", "next", cwd=d)                          # settles `gone` incomplete
@@ -539,7 +558,7 @@ def project_mode_refuses_a_brief_and_a_scope_note_by_name():
     # A refusal names what was typed. `--task-brief-file` was folded into `--task-brief` at
     # both sites, so an operator who supplied a file was answered about a flag they had not
     # used — and could not tell whether their own was allowed or had simply been ignored.
-    _io.open(os.path.join(d, "brief.md"), "w", encoding="utf-8").write("requirements\n")
+    write_text(os.path.join(d, "brief.md"), "requirements\n")
     r = run("brief", "--task-brief-file", "brief.md", cwd=d)
     ok(r.returncode != 0 and "--task-brief-file" in r.stderr,
        f"brief must name the file flag it was given: {r.stderr.strip()[:160]}")
@@ -547,7 +566,7 @@ def project_mode_refuses_a_brief_and_a_scope_note_by_name():
             "--", "pkg", cwd=d)
     ok(r.returncode != 0 and "--task-brief-file" in r.stderr,
        f"init must name it too: {r.stderr.strip()[:160]}")
-    st = json.load(_io.open(os.path.join(d, ".loop-review", "state.json"), encoding="utf-8"))
+    st = json.loads(read_text(os.path.join(d, ".loop-review", "state.json")))
     ok(st.get("scope_note") is None, f"nothing may have been recorded: {st.get('scope_note')!r}")
 
     run("reset", cwd=d, check=True)                       # changes mode keeps both
@@ -646,7 +665,7 @@ def the_documented_project_workflow_runs_as_written():
     ok(run("project", "close", cwd=d).returncode != 0, "and a plain close must refuse")
     ok(run("project", "close", "--force", cwd=d).returncode == 0,
        "P2's documented recovery must actually free the queue")
-    st = json.load(open(os.path.join(d, ".loop-review", "project.json")))
+    st = json.loads(read_text(os.path.join(d, ".loop-review", "project.json")))
     ok([x["status"] for x in st["areas"]] == ["accepted", "incomplete"],
        f"ledger must record both outcomes, got {[x['status'] for x in st['areas']]}")
 
@@ -679,7 +698,7 @@ def fingerprint_frames_path_and_content():
 def fingerprint_command_matches_the_gates():
     d = repo({"src/a.py": "v1\n"})
     run("init", "--mode", "project", "--", "src", cwd=d, check=True)
-    state = json.load(open(os.path.join(d, ".loop-review", "state.json")))
+    state = json.loads(read_text(os.path.join(d, ".loop-review", "state.json")))
     printed = run("fingerprint", cwd=d, check=True).stdout.strip()
     ok(printed == state["fingerprint_current"],
        f"project mode: `fingerprint` printed {printed}, gates use {state['fingerprint_current']}")
@@ -687,7 +706,7 @@ def fingerprint_command_matches_the_gates():
     write(d, "src/a.py", "v2\n")
     sh("git commit -qam work", d)
     run("init", "--base", "HEAD~1", "--", "src", cwd=d, check=True)
-    state = json.load(open(os.path.join(d, ".loop-review", "state.json")))
+    state = json.loads(read_text(os.path.join(d, ".loop-review", "state.json")))
     printed = run("fingerprint", cwd=d, check=True).stdout.strip()
     ok(printed == state["fingerprint_current"],
        f"--base: `fingerprint` printed {printed}, gates use {state['fingerprint_current']}")
@@ -770,7 +789,7 @@ def no_command_edits_a_recorded_pass_while_a_newer_one_is_open():
         r = run(*cmd, cwd=d)
         ok(r.returncode != 0 and "pass 2 is open" in r.stderr,
            f"`{cmd[0]}` must refuse while a newer pass is open: rc={r.returncode} {r.stderr.strip()[:160]}")
-    st = json.load(_io.open(os.path.join(d, ".loop-review", "state.json"), encoding="utf-8"))
+    st = json.loads(read_text(os.path.join(d, ".loop-review", "state.json")))
     r1 = st["passes"][0]["result"]
     ok(r1["resolved"] == 0 and "resolution_log" not in r1,
        f"and the superseded pass must be untouched: {r1}")
@@ -801,7 +820,7 @@ def amend_refuses_while_a_newer_pass_is_open():
     r = run("amend", "--score", "9.5", "--findings", "3", cwd=d)
     ok(r.returncode != 0 and "pass 2 is open" in r.stderr,
        f"amend must refuse while a newer pass is open: rc={r.returncode} {r.stderr.strip()[:160]}")
-    st = json.load(_io.open(os.path.join(d, ".loop-review", "state.json"), encoding="utf-8"))
+    st = json.loads(read_text(os.path.join(d, ".loop-review", "state.json")))
     ok(st["passes"][0]["result"]["findings"] == 1,
        f"and must not have touched the superseded pass: {st['passes'][0]['result']}")
 
@@ -860,10 +879,9 @@ def report_only_close_reads_the_same_conditions_as_the_acceptance_gate():
     run("pass-start", cwd=d, check=True)
     run("pass-record", "--score", "9", "--findings", "0", "--understood",
         "--test-evidence", "justified-absent", cwd=d, check=True)
-    _io.open(os.path.join(d, stem), "w").write("A. nothing here yet\n")
+    write_text(os.path.join(d, stem), "A. nothing here yet\n")
     run("project", "close", cwd=d, check=True)
-    area = json.load(_io.open(os.path.join(d, ".loop-review", "project.json"),
-                              encoding="utf-8"))["areas"][0]
+    area = json.loads(read_text(os.path.join(d, ".loop-review", "project.json")))["areas"][0]
     ok(area["status"] == "reviewed",
        f"an area queued empty on purpose must close reviewed: {area['status']}, {area['blockers']}")
 
@@ -873,11 +891,10 @@ def report_only_close_reads_the_same_conditions_as_the_acceptance_gate():
     out = run("project", "next", cwd=d, check=True).stdout
     stem = out.split("findings file: ")[1].splitlines()[0]
     pass_through(d, "9", "0", "trusted")
-    _io.open(os.path.join(d, stem), "w").write("A. clean\n")
+    write_text(os.path.join(d, stem), "A. clean\n")
     sh("git rm -q -r pkg && git commit -qm drop", d)
     run("project", "close", cwd=d, check=True)
-    area = json.load(_io.open(os.path.join(d, ".loop-review", "project.json"),
-                              encoding="utf-8"))["areas"][0]
+    area = json.loads(read_text(os.path.join(d, ".loop-review", "project.json")))["areas"][0]
     ok(area["status"] == "incomplete" and any("files are gone" in b for b in area["blockers"]),
        f"an area that vanished must still be incomplete: {area['status']}, {area['blockers']}")
 
@@ -895,15 +912,14 @@ def report_only_close_refuses_to_read_an_open_pass_as_a_review():
     run("project", "init", "--report-only", "--", "pkg", cwd=d, check=True)
     stem = run("project", "next", cwd=d, check=True).stdout.split("findings file: ")[1].splitlines()[0]
     pass_through(d, "8", "1", "trusted")
-    _io.open(os.path.join(d, stem), "w").write("A. one finding\n")
+    write_text(os.path.join(d, stem), "A. one finding\n")
 
     write(d, "pkg/a.py", "y\n")                        # a second pass is opened...
     run("validate", "--", "true", cwd=d)
     run("pass-start", cwd=d, check=True)
     sh("git checkout -- pkg/a.py", d)                  # ...and the area returns to the reviewed state
     r = run("project", "close", cwd=d, check=True)
-    area = json.load(_io.open(os.path.join(d, ".loop-review", "project.json"),
-                              encoding="utf-8"))["areas"][0]
+    area = json.loads(read_text(os.path.join(d, ".loop-review", "project.json")))["areas"][0]
     ok(area["status"] == "incomplete",
        f"an unrecorded pass must not read as a completed review, got {area['status']}")
     ok(any("neither recorded nor aborted" in b for b in area["blockers"]),
@@ -917,15 +933,14 @@ def report_only_close_accepts_a_pass_that_was_properly_aborted():
     run("project", "init", "--report-only", "--", "pkg", cwd=d, check=True)
     stem = run("project", "next", cwd=d, check=True).stdout.split("findings file: ")[1].splitlines()[0]
     pass_through(d, "8", "1", "trusted")
-    _io.open(os.path.join(d, stem), "w").write("A. one finding\n")
+    write_text(os.path.join(d, stem), "A. one finding\n")
     write(d, "pkg/a.py", "y\n")
     run("validate", "--", "true", cwd=d)
     run("pass-start", cwd=d, check=True)
     sh("git checkout -- pkg/a.py", d)
     run("pass-abort", "--reason", "the area moved mid-review", cwd=d, check=True)
     run("project", "close", cwd=d, check=True)
-    area = json.load(_io.open(os.path.join(d, ".loop-review", "project.json"),
-                              encoding="utf-8"))["areas"][0]
+    area = json.loads(read_text(os.path.join(d, ".loop-review", "project.json")))["areas"][0]
     ok(area["status"] == "reviewed" and not area["blockers"],
        f"an aborted pass must not block the close: {area['status']}, {area['blockers']}")
 
@@ -942,7 +957,7 @@ def reset_clears_its_own_debris_and_says_so_only_about_a_stranger():
     d = repo({"pkg/a.py": "x\n"})
     sd = os.path.join(d, ".loop-review")
     run("project", "init", "--", "pkg", cwd=d, check=True)
-    _io.open(os.path.join(sd, "project.json.tmp"), "w").write('{"partial"')
+    write_text(os.path.join(sd, "project.json.tmp"), '{"partial"')
     r = run("reset", cwd=d, check=True)
     ok(not os.path.exists(os.path.join(sd, "project.json.tmp")),
        "a plain reset must clear the ledger's own .tmp debris")
@@ -951,7 +966,7 @@ def reset_clears_its_own_debris_and_says_so_only_about_a_stranger():
     ok(os.path.exists(os.path.join(sd, "project.json")),
        "while the ledger itself survives a reset without --project")
 
-    _io.open(os.path.join(sd, "notes.txt"), "w").write("operator notes\n")
+    write_text(os.path.join(sd, "notes.txt"), "operator notes\n")
     r = run("reset", "--project", cwd=d, check=True)
     ok(os.path.exists(os.path.join(sd, "notes.txt")),
        "a file the operator put there must never be deleted")
@@ -1072,7 +1087,7 @@ def none_and_a_command_are_refused_together_by_both_validate_commands():
         r = run(cmd, cwd=d)
         ok(r.returncode != 0 and "--none" in r.stderr,
            f"`{cmd}` with neither must name both ways in: {r.stderr.strip()[:160]}")
-    st = json.load(_io.open(os.path.join(d, ".loop-review", "state.json"), encoding="utf-8"))
+    st = json.loads(read_text(os.path.join(d, ".loop-review", "state.json")))
     ok(not st["validation"], f"nothing may have been recorded by a refused call: {st['validation']}")
 
     run("validate", "--", "echo real", cwd=d, check=True)
@@ -1216,7 +1231,7 @@ def an_inherited_check_cannot_be_retired_by_letting_it_fail_to_start():
     """
     d = repo({"src/a.py": "1\n"})
     tool = os.path.join(d, "suite.sh")
-    _io.open(tool, "w").write("#!/bin/sh\nexit 0\n")
+    write_text(tool, "#!/bin/sh\nexit 0\n")
     os.chmod(tool, 0o755)
     write(d, "src/a.py", "2\n")
     run("init", "--", "src", cwd=d, check=True)
@@ -1373,12 +1388,11 @@ def task_brief_file_is_read_from_the_callers_directory():
     d = repo({"a.py": "v1\n", "sub/keep.txt": "x\n"})
     write(d, "a.py", "v2\n")
     write(d, "brief.md", "ROOT-BRIEF\n")
-    with open(os.path.join(d, "sub", "brief.md"), "w") as f:
-        f.write("SUB-BRIEF\n")
+    write_text(os.path.join(d, "sub", "brief.md"), "SUB-BRIEF\n")
     subprocess.run([sys.executable, LOOP, "init", "--task-brief-file", "brief.md",
                     "--", "../a.py"], cwd=os.path.join(d, "sub"),
                    capture_output=True, text=True)
-    state = json.load(open(os.path.join(d, ".loop-review", "state.json")))
+    state = json.loads(read_text(os.path.join(d, ".loop-review", "state.json")))
     ok(state.get("task_brief") == "SUB-BRIEF",
        f"--task-brief-file must resolve next to the caller, got {state.get('task_brief')!r}")
 
@@ -1397,15 +1411,13 @@ def state_is_written_atomically():
     here = os.getcwd()
     os.chdir(d)
     try:
-        with open(lr.STATE_FILE) as f:
-            good = json.load(f)
+        good = json.loads(read_text(lr.STATE_FILE))
         try:
             lr.save(dict(good, poison=object()))
         except TypeError:
             pass
         try:
-            with open(lr.STATE_FILE) as f:
-                after = json.load(f)
+            after = json.loads(read_text(lr.STATE_FILE))
         except ValueError:
             after = None
         ok(after == good, "an interrupted write must leave the previous state intact")
@@ -1452,7 +1464,7 @@ def forcing_a_close_past_a_missing_findings_file_never_yields_accepted():
        "the missing findings file must be refused while it can still be written")
     r = run("project", "close", "--force", cwd=d)
     ok(r.returncode == 0, f"--force must settle the area, got rc={r.returncode}")
-    area = json.load(open(os.path.join(d, ".loop-review", "project.json")))["areas"][0]
+    area = json.loads(read_text(os.path.join(d, ".loop-review", "project.json")))["areas"][0]
     ok(area["status"] == "incomplete",
        f"a forced close with no surviving review must not read as accepted, got {area['status']}")
     ok(any("findings" in b for b in area["blockers"]),
@@ -1467,9 +1479,9 @@ def a_clean_area_with_its_findings_file_still_closes_accepted():
     out = run("project", "next", cwd=d, check=True).stdout
     stem = out.split("findings file: ")[1].splitlines()[0]
     pass_through(d, "9.5", "0", "trusted")
-    _io.open(os.path.join(d, stem), "w").write("A. no actionable findings\nB. understood\n")
+    write_text(os.path.join(d, stem), "A. no actionable findings\nB. understood\n")
     ok(run("project", "close", cwd=d).returncode == 0, "a clean area with its file must close")
-    area = json.load(open(os.path.join(d, ".loop-review", "project.json")))["areas"][0]
+    area = json.loads(read_text(os.path.join(d, ".loop-review", "project.json")))["areas"][0]
     ok(area["status"] == "accepted" and area["findings_file"],
        f"and it must be recorded accepted with its file: {area['status']}, {area['findings_file']}")
 
@@ -1487,7 +1499,7 @@ def an_area_whose_name_is_not_utf8_is_reviewed_like_any_other():
     d = repo({"keep/a.py": "x\n"})
     area = os.fsdecode(b"pkg_\xff")
     os.makedirs(os.path.join(d, area))
-    _io.open(os.path.join(d, area, "a.py"), "w").write("x\n")
+    write_text(os.path.join(d, area, "a.py"), "x\n")
     sh("git add -A && git commit -qm add", d)
     run("project", "init", "--report-only", "--", area, cwd=d, check=True)
     out = run("project", "next", cwd=d, check=True)
@@ -1495,12 +1507,12 @@ def an_area_whose_name_is_not_utf8_is_reviewed_like_any_other():
        f"the printed path is escaped, so the operator must be told: {(out.stdout + out.stderr)[:300]}")
     pass_through(d, "9.5", "0", "trusted")
     # Built through the script, not copied from its output: the printed form is escaped.
-    led = json.load(_io.open(os.path.join(d, ".loop-review", "project.json"), encoding="utf-8"))
+    led = json.loads(read_text(os.path.join(d, ".loop-review", "project.json")))
     stem = os.path.join(".loop-review", "findings",
                         module().area_slug(led["areas"][0]) + ".md")
-    _io.open(os.path.join(d, stem), "w", encoding="utf-8").write("A. no actionable findings\n")
+    write_text(os.path.join(d, stem), "A. no actionable findings\n")
     run("project", "close", cwd=d, check=True)
-    led = json.load(_io.open(os.path.join(d, ".loop-review", "project.json"), encoding="utf-8"))
+    led = json.loads(read_text(os.path.join(d, ".loop-review", "project.json")))
     ok(led["areas"][0]["status"] == "reviewed" and led["areas"][0]["findings_file"],
        f"the area must close like any other: {led['areas'][0]['status']}, "
        f"{led['areas'][0]['findings_file']}")
@@ -1523,7 +1535,7 @@ def a_findings_file_is_never_hidden_by_a_leading_dot():
     first = run("project", "next", cwd=d, check=True).stdout.split("findings file: ")[1].splitlines()[0]
     ok(not os.path.basename(first).startswith("."),
        f"a dotted area must not yield a hidden findings file: {first}")
-    _io.open(os.path.join(d, first), "w").write("A. none\nB. understood\n")
+    write_text(os.path.join(d, first), "A. none\nB. understood\n")
     run("validate", "--", "true", cwd=d)
     run("pass-start", cwd=d, check=True)
     run("pass-record", "--score", "9.5", "--findings", "0", "--understood",
@@ -1561,8 +1573,7 @@ def multi_path_areas_are_one_area_with_a_bounded_slug():
     ok(len(os.path.basename(stem)) <= 100,
        f"findings filename must stay writable, got {len(os.path.basename(stem))} bytes")
     os.makedirs(os.path.join(d, os.path.dirname(stem)), exist_ok=True)
-    with open(os.path.join(d, stem), "w") as f:
-        f.write("x\n")
+    write_text(os.path.join(d, stem), "x\n")
     ok(os.path.exists(os.path.join(d, stem)), "the findings file must be creatable")
 
 
@@ -1590,10 +1601,10 @@ def a_glue_operator_missing_a_path_is_refused_wherever_it_sits():
 
     r = run("project", "init", "--", "a", "+", "b", cwd=d, check=True)
     ok(r.stdout.count("\n  - ") == 1, "the glued form must still queue one area")
-    led = json.load(open(os.path.join(d, ".loop-review", "project.json")))
+    led = json.loads(read_text(os.path.join(d, ".loop-review", "project.json")))
     ok(led["areas"][0]["paths"] == ["a", "b"], f"joined into one area: {led['areas'][0]['paths']}")
     r = run("project", "init", "--force", "--", "a", "b", cwd=d, check=True)
-    led = json.load(open(os.path.join(d, ".loop-review", "project.json")))
+    led = json.loads(read_text(os.path.join(d, ".loop-review", "project.json")))
     ok([x["paths"] for x in led["areas"]] == [["a"], ["b"]],
        f"and without `+` they stay separate: {[x['paths'] for x in led['areas']]}")
 
@@ -1607,20 +1618,26 @@ def no_text_file_is_opened_at_the_mercy_of_the_platform_locale():
     clear error. The first pass at this fixed the call sites it happened to look at: four
     carried `encoding="utf-8"` while `load`, `load_project` and the atomic write did not.
     Binary mode is exempt — `fingerprint()` reads files as bytes precisely to avoid decoding.
+
+    This suite is checked too, and for a sharper reason than tidiness: it is where the
+    surrogate and non-UTF-8 paths are exercised, so its own fixtures reading `state.json`
+    through an ASCII codec fail on content the product handles correctly — a green product
+    reported as broken by its own tests. 48 of its 83 `open()` calls were bare, including
+    `repo()` and `write()`, which every case goes through.
     """
-    src = _io.open(os.path.join(ROOT, "scripts", "loop_review.py"), encoding="utf-8").read()
     bare = []
-    for node in ast.walk(ast.parse(src)):
-        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-                and node.func.id == "open"):
-            continue
-        if any(k.arg == "encoding" for k in node.keywords):
-            continue
-        mode = node.args[1] if len(node.args) > 1 else None
-        if isinstance(mode, ast.Constant) and "b" in mode.value:
-            continue
-        bare.append(node.lineno)
-    ok(not bare, "text open() without encoding= at line(s): " + ", ".join(map(str, bare)))
+    for rel in ("scripts/loop_review.py", "scripts/selftest.py"):
+        for node in ast.walk(ast.parse(read_text(os.path.join(ROOT, rel)))):
+            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                    and node.func.id == "open"):
+                continue
+            if any(k.arg == "encoding" for k in node.keywords):
+                continue
+            mode = node.args[1] if len(node.args) > 1 else None
+            if isinstance(mode, ast.Constant) and "b" in mode.value:
+                continue
+            bare.append(f"{rel}:{node.lineno}")
+    ok(not bare, "text open() without encoding= at " + ", ".join(bare))
 
 
 @case
@@ -1633,7 +1650,7 @@ def no_helper_declares_a_parameter_it_never_reads():
     Command functions are exempt: the dispatcher calls every one as `a.fn(a)`, so `a` is
     part of the contract whether that command needs it or not.
     """
-    src = _io.open(os.path.join(ROOT, "scripts", "loop_review.py"), encoding="utf-8").read()
+    src = read_text(os.path.join(ROOT, "scripts", "loop_review.py"))
     stale = []
     for node in ast.walk(ast.parse(src)):
         if not isinstance(node, ast.FunctionDef):
@@ -1657,7 +1674,7 @@ def the_script_carries_no_unreachable_helper():
     existence check somewhere else. Names referenced only from `selftest.py` count as live;
     everything else must be reachable from within the script.
     """
-    src = _io.open(os.path.join(ROOT, "scripts", "loop_review.py"), encoding="utf-8").read()
+    src = read_text(os.path.join(ROOT, "scripts", "loop_review.py"))
     tree = ast.parse(src)
     defined = {n.name: n.lineno for n in tree.body if isinstance(n, ast.FunctionDef)}
     used = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
@@ -1665,8 +1682,7 @@ def the_script_carries_no_unreachable_helper():
     # The entry point is called by the interpreter, and selftest drives the CLI through these.
     used |= {"main", "build_parser"}
     used |= set(re.findall(r"module\(\)\.([A-Za-z_]\w*)",
-                           _io.open(os.path.join(ROOT, "scripts", "selftest.py"),
-                                    encoding="utf-8").read()))
+                           read_text(os.path.join(ROOT, "scripts", "selftest.py"))))
     dead = sorted((name, line) for name, line in defined.items() if name not in used)
     ok(not dead, "unreachable helper(s): " + "; ".join(f"{n} at line {l}" for n, l in dead))
 
@@ -1720,7 +1736,7 @@ def script_message_lines():
     `reset` never had, while the only other route out of that state was refused as well.
     Messages are prose too — they are read by the agent and are part of the CLI's contract.
     """
-    src = _io.open(os.path.join(ROOT, "scripts", "loop_review.py"), encoding="utf-8").read()
+    src = read_text(os.path.join(ROOT, "scripts", "loop_review.py"))
     out = []
     for node in ast.walk(ast.parse(src)):
         if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
@@ -1744,7 +1760,7 @@ def doc_command_lines():
     """
     out = []
     for rel in DOCS:
-        text = _io.open(os.path.join(ROOT, rel), encoding="utf-8").read()
+        text = read_text(os.path.join(ROOT, rel))
         text = text.replace("\\\n", " ")                     # fenced line continuations
         for raw in text.splitlines():
             line = raw.strip().lstrip("#").strip()
@@ -1817,9 +1833,9 @@ def stuck_states():
     run("project", "init", "--", "a", "b", cwd=d, check=True)
     run("project", "next", cwd=d, check=True)
     sf = os.path.join(d, ".loop-review", "state.json")
-    st = json.load(_io.open(sf, encoding="utf-8"))
+    st = json.loads(read_text(sf))
     st["area"] = st["scope"] = ["b"]                   # a loop belonging to another area
-    json.dump(st, _io.open(sf, "w", encoding="utf-8"), indent=2)
+    write_text(sf, json.dumps(st, indent=2))
     out.append(("project close, foreign loop", d, ("project", "close"),
                 run("project", "close", cwd=d).stderr))
 
@@ -1914,7 +1930,7 @@ def the_prose_never_invokes_the_script_by_a_repo_relative_path():
     `scripts/loop_review.py` is exactly the right path.
     """
     for rel in (d for d in DOCS if d not in ("AGENTS.md", "README.md")):
-        text = _io.open(os.path.join(ROOT, rel), encoding="utf-8").read()
+        text = read_text(os.path.join(ROOT, rel))
         for n, line in enumerate(text.splitlines(), 1):
             if re.search(r"python3\s+scripts/loop_review\.py", line):
                 FAILURES.append(f"{rel}:{n} invokes the script by a repo-relative path: {line.strip()}")
@@ -1945,7 +1961,7 @@ def a_clean_report_only_area_still_leaves_its_review_behind():
        "a clean area's review must be written down too — closing deletes the loop state")
     findings(d, "pkg", "A. No actionable findings\nB. ...\nC. trusted\nD. 9.5\n")
     ok(run("project", "close", cwd=d).returncode == 0, "with the review written it closes")
-    led = json.load(open(os.path.join(d, ".loop-review", "project.json")))["areas"][0]
+    led = json.loads(read_text(os.path.join(d, ".loop-review", "project.json")))["areas"][0]
     ok(led["status"] == "reviewed", f"expected reviewed, got {led['status']}")
     ok(led.get("test_evidence") == "trusted",
        "the ledger must carry the verdict that gates exit condition 4")
@@ -1959,7 +1975,7 @@ def an_unreviewable_area_does_not_stall_the_queue():
     run("project", "next", cwd=d, check=True)
     r = run("project", "close", cwd=d)
     ok(r.returncode == 0, "an area with no recorded pass must close without --force")
-    led = json.load(open(os.path.join(d, ".loop-review", "project.json")))["areas"][0]
+    led = json.loads(read_text(os.path.join(d, ".loop-review", "project.json")))["areas"][0]
     ok(led["status"] == "incomplete" and led["blockers"],
        f"it must be recorded incomplete with its blocker, got {led['status']}")
     ok(run("project", "next", cwd=d).returncode == 0, "the queue must continue to the next area")
@@ -2002,7 +2018,7 @@ def a_relative_base_is_pinned_so_a_later_commit_cannot_narrow_the_scope():
     write(d, "src/a.py", "one\ntwo\nthree\n")
     sh("git add -A && git commit -qm second", d)
     run("init", "--base", "HEAD~2", "--", "src", cwd=d, check=True)
-    st = json.load(open(os.path.join(d, ".loop-review", "state.json")))
+    st = json.loads(read_text(os.path.join(d, ".loop-review", "state.json")))
     ok(st["base"] and len(st["base"]) >= 40,
        f"the base must be pinned to a commit id, got {st['base']!r}")
     before = st["fingerprint_current"]
@@ -2052,7 +2068,7 @@ def a_recorded_fix_must_be_on_disk_before_acceptance():
     r = run("accept", cwd=d)
     ok(r.returncode != 0 and "defective" in r.stdout,
        f"acceptance must refuse while the reviewed state is still on disk: {r.stdout.strip()[:200]}")
-    ok(_io.open(os.path.join(d, "src/a.py")).read() == "DEFECT\n", "fixture: nothing was fixed")
+    ok(read_text(os.path.join(d, "src/a.py")) == "DEFECT\n", "fixture: nothing was fixed")
 
     write(d, "src/a.py", "good again\n")                   # now actually fix it
     r = run("accept", cwd=d)
@@ -2084,7 +2100,7 @@ def a_fix_outside_the_scope_can_be_brought_under_the_gates():
     ok(after != before, "widening the scope must move the reviewed state")
     ok(run("accept", cwd=d).returncode != 0,
        "the earlier review must now be stale, forcing a pass that sees the added path")
-    st = json.load(open(os.path.join(d, ".loop-review", "state.json")))
+    st = json.loads(read_text(os.path.join(d, ".loop-review", "state.json")))
     ok(st["scope"] == ["src/client.ts", "src/helper.ts"], f"scope: {st['scope']}")
     ok(len(st["passes"]) == 1, "widening must keep the pass history, unlike init --force")
     ok(run("scope", "--", "src/client.ts", cwd=d).returncode != 0,
@@ -2124,7 +2140,7 @@ def a_project_area_is_freed_by_close_not_by_reset():
        "a clean area's review must be written down in fix mode too")
     findings(d, "pkg")
     run("project", "close", cwd=d, check=True)
-    led = json.load(open(os.path.join(d, ".loop-review", "project.json")))["areas"][0]
+    led = json.loads(read_text(os.path.join(d, ".loop-review", "project.json")))["areas"][0]
     ok(led["status"] == "accepted" and led["score"] == 9.5 and led["passes"] == 1,
        f"the outcome must survive: {led}")
 
@@ -2159,9 +2175,9 @@ def a_previous_review_is_set_aside_not_reused():
     ok(run("project", "close", cwd=d).returncode == 0, "writing this run's output closes it")
     live = [f for f in os.listdir(fdir) if f.endswith(".md") and not f.endswith(".prev.md")]
     prev = [f for f in os.listdir(fdir) if f.endswith(".prev.md")]
-    ok(len(live) == 1 and open(os.path.join(fdir, live[0])).read().strip() == "second review",
+    ok(len(live) == 1 and read_text(os.path.join(fdir, live[0])).strip() == "second review",
        "the surviving deliverable must be the current review")
-    ok(len(prev) == 1 and open(os.path.join(fdir, prev[0])).read().strip() == "first review",
+    ok(len(prev) == 1 and read_text(os.path.join(fdir, prev[0])).strip() == "first review",
        "and the previous review must be kept, not destroyed")
     # The rotation is what lets the gate be a plain existence check, and that is what
     # `references/project-mode.md` promises: a repeat review of an unchanged area may reach
@@ -2211,7 +2227,7 @@ def resolved_never_exceeds_the_findings_reported():
     run("pass-record", "--score", "8", "--findings", "2", "--understood",
         "--test-evidence", "trusted", cwd=d, check=True)
     run("resolve", "--fixed", "5", cwd=d, check=True)
-    st = json.load(open(os.path.join(d, ".loop-review", "state.json")))
+    st = json.loads(read_text(os.path.join(d, ".loop-review", "state.json")))
     ok(st["passes"][-1]["result"]["resolved"] == 2,
        f"resolved must clamp to findings, got {st['passes'][-1]['result']}")
 
@@ -2246,7 +2262,7 @@ def a_scope_that_empties_after_init_stops_the_loop():
        f"a vanished area must be blocked by name, not incidentally: {r.stdout.strip()}")
     findings(d2, "pkg")
     run("project", "close", cwd=d2, check=True)
-    led = json.load(open(os.path.join(d2, ".loop-review", "project.json")))["areas"][0]
+    led = json.loads(read_text(os.path.join(d2, ".loop-review", "project.json")))["areas"][0]
     ok(led["status"] == "incomplete",
        f"and it must never reach the ledger as accepted, got {led['status']}")
 
@@ -2282,7 +2298,7 @@ def a_path_argument_is_read_from_the_directory_the_operator_stood_in():
     out = run("brief", "--task-brief-file", "brief.md", cwd=sub, check=True).stdout
     ok("REAL BRIEF" in out and "DECOY" not in out,
        f"the brief must come from the caller's directory: {out.strip()[:160]}")
-    st = json.load(_io.open(os.path.join(d, ".loop-review", "state.json"), encoding="utf-8"))
+    st = json.loads(read_text(os.path.join(d, ".loop-review", "state.json")))
     ok(st["scope"] == ["sub/f.py"], f"and a scope path is resolved the same way: {st['scope']}")
     r = run("brief", "--force", "--task-brief-file", "nosuch.md", cwd=sub)
     ok(r.returncode != 0 and "nosuch.md" in r.stderr,
@@ -2290,7 +2306,7 @@ def a_path_argument_is_read_from_the_directory_the_operator_stood_in():
 
     run("reset", cwd=sub, check=True)
     r = run("project", "init", "--", "f.py", "+", "brief.md", cwd=sub, check=True)
-    led = json.load(_io.open(os.path.join(d, ".loop-review", "project.json"), encoding="utf-8"))
+    led = json.loads(read_text(os.path.join(d, ".loop-review", "project.json")))
     ok([x["paths"] for x in led["areas"]] == [["sub/f.py", "sub/brief.md"]],
        f"`+` must survive path resolution and still glue: {[x['paths'] for x in led['areas']]}")
 
@@ -2303,7 +2319,7 @@ def every_path_argument_is_declared_with_a_resolving_type():
     not, and nothing said so. A `paths` positional or a `*_file` flag declared without
     `user_path`/`area_token` is that drift starting again.
     """
-    src = _io.open(os.path.join(ROOT, "scripts", "loop_review.py"), encoding="utf-8").read()
+    src = read_text(os.path.join(ROOT, "scripts", "loop_review.py"))
     bad = []
     for node in ast.walk(ast.parse(src)):
         if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
@@ -2413,7 +2429,7 @@ def a_report_only_area_that_moved_after_its_pass_is_not_reviewed():
     findings(d, "pkg", "three findings\n")
     write(d, "pkg/a.py", "completely rewritten after the review\n")
     run("project", "close", cwd=d, check=True)
-    led = json.load(open(os.path.join(d, ".loop-review", "project.json")))["areas"][0]
+    led = json.loads(read_text(os.path.join(d, ".loop-review", "project.json")))["areas"][0]
     ok(led["status"] == "incomplete" and any("moved" in b for b in led["blockers"]),
        f"an area rewritten after its pass must not close `reviewed`: {led}")
 
@@ -2465,26 +2481,25 @@ def two_areas_never_share_a_findings_file():
     first = run("project", "next", cwd=d, check=True).stdout.split(
         "findings file: ")[1].splitlines()[0]
     pass_through(d, "8", "1", "trusted")
-    with open(os.path.join(d, first), "w") as f:
-        f.write("area one\n")
+    write_text(os.path.join(d, first), "area one\n")
     run("project", "close", cwd=d, check=True)
     second = run("project", "next", cwd=d, check=True).stdout.split(
         "findings file: ")[1].splitlines()[0]
     ok(first != second, f"two areas must not share {first}")
-    ok(open(os.path.join(d, first)).read().strip() == "area one",
+    ok(read_text(os.path.join(d, first)).strip() == "area one",
        "the first area's review must survive the second area opening")
 
 
 @case
 def skill_md_stays_inside_the_budget_the_passport_states():
     """The budget is parsed out of AGENTS.md, so the number and the file cannot drift."""
-    passport = _io.open(os.path.join(ROOT, "AGENTS.md"), encoding="utf-8").read()
+    passport = read_text(os.path.join(ROOT, "AGENTS.md"))
     m = re.search(r"budget it in words[^)]*?\(~(\d+)\)", passport)
     ok(m is not None, "AGENTS.md must state the SKILL.md word budget in a parseable form")
     if not m:
         return
     budget = int(m.group(1))
-    words = len(_io.open(os.path.join(ROOT, "SKILL.md"), encoding="utf-8").read().split())
+    words = len(read_text(os.path.join(ROOT, "SKILL.md")).split())
     ok(words <= budget, f"SKILL.md is {words} words against the stated budget of {budget}")
 
 
