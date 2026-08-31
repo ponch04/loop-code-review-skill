@@ -48,10 +48,12 @@ there too, but `accept` still refuses on it: fix it as part of the area, or clos
 
 ## Closing
 
-`project close` refuses in **both** modes while the findings file is missing **or still holds an
-earlier review's text** — the path repeats on every review of an area, so write this reviewer's
-whole output over it. Closing deletes the loop state, so that file is all that survives, and a
-clean area needs it as much as a noisy one.
+`project close` refuses in **both** modes while the findings file is missing. The path repeats
+on every review of an area, so `project next` moves any earlier review aside to
+`<slug>.prev.md` before the loop opens: whatever is at the live path was written during *this*
+review, and an identical verdict on a second clean run is fine. Write this reviewer's whole
+output there. Closing deletes the loop state, so that file is all that survives, and a clean
+area needs it as much as a noisy one.
 
 Never `reset` inside an area: `project close` is what records its outcome and frees the loop.
 If the open loop turns out to belong to something else — another scope entirely — `project
