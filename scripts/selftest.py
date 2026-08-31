@@ -1379,6 +1379,41 @@ def a_clean_area_with_its_findings_file_still_closes_accepted():
 
 
 @case
+def an_area_whose_name_is_not_utf8_is_reviewed_like_any_other():
+    """Paths come from git and argv as bytes; not all of them decode.
+
+    `os.fsdecode` carries the undecodable ones as surrogates (PEP 383), and encoding those
+    with the default utf-8 raises. It raised inside the findings-file slug, so an area with
+    such a name did not fail a gate — `project next` died with a traceback, and the queue
+    stopped on it. Every other path in the loop already handles these bytes; this one was
+    the exception, so the case walks the whole area, not just the crash.
+    """
+    d = repo({"keep/a.py": "x\n"})
+    area = os.fsdecode(b"pkg_\xff")
+    os.makedirs(os.path.join(d, area))
+    _io.open(os.path.join(d, area, "a.py"), "w").write("x\n")
+    sh("git add -A && git commit -qm add", d)
+    run("project", "init", "--report-only", "--", area, cwd=d, check=True)
+    out = run("project", "next", cwd=d, check=True)
+    ok("undecodable bytes" in out.stdout + out.stderr,
+       f"the printed path is escaped, so the operator must be told: {(out.stdout + out.stderr)[:300]}")
+    pass_through(d, "9.5", "0", "trusted")
+    # Built through the script, not copied from its output: the printed form is escaped.
+    led = json.load(_io.open(os.path.join(d, ".loop-review", "project.json"), encoding="utf-8"))
+    stem = os.path.join(".loop-review", "findings",
+                        module().area_slug(led["areas"][0]) + ".md")
+    _io.open(os.path.join(d, stem), "w", encoding="utf-8").write("A. no actionable findings\n")
+    run("project", "close", cwd=d, check=True)
+    led = json.load(_io.open(os.path.join(d, ".loop-review", "project.json"), encoding="utf-8"))
+    ok(led["areas"][0]["status"] == "reviewed" and led["areas"][0]["findings_file"],
+       f"the area must close like any other: {led['areas'][0]['status']}, "
+       f"{led['areas'][0]['findings_file']}")
+    written = os.listdir(os.path.join(d, ".loop-review", "findings").encode())
+    ok(any(b"\xff" in f for f in written),
+       f"and its report must be on disk under the original bytes: {written}")
+
+
+@case
 def a_findings_file_is_never_hidden_by_a_leading_dot():
     """In report-only that file is the whole deliverable, so it has to be findable.
 

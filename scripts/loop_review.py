@@ -1448,7 +1448,12 @@ def area_slug(x):
     # both flatten to `src__lib`, so one area's findings file silently overwrote the other's
     # — and in report-only that file is the entire deliverable, written after `project close`
     # has already deleted the state that could contradict it.
-    tail = hashlib.sha256("\0".join(paths).encode()).hexdigest()[:8]
+    # os.fsencode, not .encode(): a path git handed us may hold bytes no encoding decodes,
+    # which `os.fsdecode` carries as surrogates (PEP 383). Encoding those with the default
+    # utf-8 raises, and it raised here — inside the slug of the findings file — so an area
+    # whose name is not valid UTF-8 crashed `project next` with a traceback instead of being
+    # reviewed. `fsencode` round-trips them back to the original bytes.
+    tail = hashlib.sha256(os.fsencode("\0".join(paths))).hexdigest()[:8]
     return (stem[:80] if len(stem) > 80 else stem) + "-" + tail
 
 
@@ -1614,7 +1619,15 @@ def cmd_project_next(a):
     os.makedirs(FINDINGS_DIR, exist_ok=True)
     done = sum(1 for x in p["areas"] if x["status"] not in ("pending", "in_progress"))
     print(f"area {done + 1}/{len(p['areas'])}: {area_name(nxt)}  (fingerprint {state['fingerprint_current']})")
-    print(f"findings file: {os.path.join(FINDINGS_DIR, area_slug(nxt) + '.md')}")
+    ffile = os.path.join(FINDINGS_DIR, area_slug(nxt) + ".md")
+    print(f"findings file: {ffile}")
+    if ffile != ffile.encode("utf-8", "replace").decode("utf-8", "replace"):
+        # The path holds bytes no encoding decodes, so what was just printed is an escaped
+        # rendering — copying it from the terminal creates a *different* file, and `project
+        # close` would then refuse for a missing report that looks written.
+        print("note: this path contains undecodable bytes and is shown escaped; write the "
+              "file through the shell's own completion of the area name, not by copying "
+              "the line above", file=sys.stderr)
     if p["report_only"]:
         print("report-only: record the pass, write the findings file, then `project close` — do not fix")
 
