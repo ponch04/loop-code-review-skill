@@ -22,7 +22,8 @@ Commands:
   validate -- <command...>                 run a validation command, record result
   validate --none --reason TEXT            record that no executable check applies here
   scope -- <paths...>                      widen the open loop's scope (never narrows it)
-  validate-drop [--force] -- <command...>  retract a record for a command that never ran,
+  validate-drop [--force] {-- <command...> | --none}
+                                           retract a record for a command that never ran,
                                            or (--force) retire a check inherited from the last pass
   pass-start                               open a full-review pass (checks gates)
   pass-abort [--reason TEXT]               discard an open pass whose review went stale
@@ -849,6 +850,11 @@ def record_state(hits):
     if not hits:
         return "absent", "it has not been re-run on the current state"
     v = hits[-1]
+    if v["cmd"] == NO_CHECK:
+        # Not a run at all: the author declared that no executable check applies. Retracting
+        # it withdraws a claim, and withdrawing it can only make the gates stricter — with no
+        # validation left, `pass-start` and `accept` both refuse.
+        return "declared", "it records that no check applies, which is a claim, not a run"
     if v["exit"] in NEVER_RAN:
         return "never-ran", f"it cannot start here (exit {v['exit']})"
     if v["exit"] == 0:
@@ -867,9 +873,14 @@ def cmd_validate_drop(a):
     """
     os.chdir(repo_root())
     state = load()
-    if not a.command:
-        die("validate-drop needs a command after `--`")
-    cmd = join_cmd(a.command)
+    if a.none and a.command:
+        die("validate-drop takes --none or a command after `--`, not both")
+    if not a.command and not a.none:
+        die("validate-drop needs a command after `--`, or --none to withdraw a "
+            "`validate --none` record")
+    # `--none` names the same record `validate --none` wrote. Without it the only way to
+    # withdraw a mistaken declaration was to type the script's internal marker verbatim.
+    cmd = NO_CHECK if a.none else join_cmd(a.command)
     state["fingerprint_current"] = fp_of(state)
     hits = [v for v in state["validation"]
             if v["cmd"] == cmd and v["fingerprint"] == state["fingerprint_current"] and not v.get("retracted")]
@@ -1765,7 +1776,7 @@ def build_parser():
     s = sub.add_parser("init"); s.add_argument("--max-passes", type=positive_int, default=5); s.add_argument("--mode", choices=MODES, default="changes"); s.add_argument("--base", metavar="REF", help="commit to diff against (changes mode); use for already-committed work"); s.add_argument("--task-brief", metavar="TEXT", help="the task's requirements and acceptance criteria, for the reviewer — never rationale or suspected issues"); s.add_argument("--task-brief-file", metavar="PATH", type=user_path, help="same, read from a file"); s.add_argument("--scope-note", metavar="TEXT", help="hunk-level ownership the reviewer must be told, echoed every pass"); s.add_argument("--allow-empty", action="store_true", help="proceed on an empty scoped diff instead of reporting `no-changes`"); s.add_argument("--force", action="store_true"); s.add_argument("paths", nargs="*", type=user_path); s.set_defaults(fn=cmd_init)
     s = sub.add_parser("validate"); s.add_argument("--none", action="store_true", help="record that no executable check applies (needs --reason)"); s.add_argument("--reason"); s.add_argument("command", nargs="*"); s.set_defaults(fn=cmd_validate)
     s = sub.add_parser("scope"); s.add_argument("paths", nargs="*", type=user_path); s.set_defaults(fn=cmd_scope)
-    s = sub.add_parser("validate-drop"); s.add_argument("--force", action="store_true"); s.add_argument("--reason"); s.add_argument("command", nargs="*"); s.set_defaults(fn=cmd_validate_drop)
+    s = sub.add_parser("validate-drop"); s.add_argument("--force", action="store_true"); s.add_argument("--none", action="store_true", help="withdraw a `validate --none` record"); s.add_argument("--reason"); s.add_argument("command", nargs="*"); s.set_defaults(fn=cmd_validate_drop)
     s = sub.add_parser("pass-start"); s.add_argument("--force", action="store_true"); s.set_defaults(fn=cmd_pass_start)
     s = sub.add_parser("brief"); s.add_argument("--task-brief", metavar="TEXT"); s.add_argument("--task-brief-file", metavar="PATH", type=user_path); s.add_argument("--scope-note", metavar="TEXT"); s.add_argument("--force", action="store_true"); s.set_defaults(fn=cmd_brief)
     s = sub.add_parser("pass-abort"); s.add_argument("--reason"); s.set_defaults(fn=cmd_pass_abort)

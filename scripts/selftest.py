@@ -880,6 +880,35 @@ def every_command_that_echoes_the_loop_context_shows_both_fields():
 
 
 @case
+def a_mistaken_no_check_declaration_can_be_withdrawn_by_name():
+    """`validate --none` writes a record under an internal marker, so retracting it needed one.
+
+    The marker is the script's own string, not something the CLI ever asks for or the docs
+    name: an operator who declared "no executable check applies" by mistake could only undo
+    it by typing an internal constant verbatim. Withdrawal is safe by construction — it takes
+    away the record that satisfies exit condition 1, so every gate gets stricter, not looser.
+    """
+    d = repo({"src/a.py": "1\n"})
+    write(d, "src/a.py", "2\n")
+    run("init", "--", "src", cwd=d, check=True)
+    run("validate", "--none", "--reason", "documentation only", cwd=d, check=True)
+    ok(run("pass-start", cwd=d).returncode == 0, "precondition: the declaration satisfies the gate")
+    run("pass-abort", "--reason", "fixture", cwd=d, check=True)
+
+    r = run("validate-drop", "--none", "--reason", "recorded by mistake", cwd=d)
+    ok(r.returncode == 0, f"--none must withdraw the declaration: {r.stderr.strip()[:160]}")
+    r = run("pass-start", cwd=d)
+    ok(r.returncode != 0 and "no validation" in r.stderr,
+       f"and the loop must then demand real validation: {r.stderr.strip()[:160]}")
+
+    ok(run("validate-drop", "--none", "--", "true", cwd=d).returncode != 0,
+       "`--none` and a command name two different records; both at once is a mistake")
+    r = run("validate-drop", cwd=d)
+    ok(r.returncode != 0 and "--none" in r.stderr,
+       f"and the empty call must name both ways in: {r.stderr.strip()[:160]}")
+
+
+@case
 def validate_drop_describes_the_state_it_refuses_in():
     """The refusal is read by whoever must decide; it has to be true about the state.
 
