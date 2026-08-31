@@ -89,14 +89,29 @@ def findings(d, slug, text="A. review\nB. understood\nC. trusted\nD. 9.5\n"):
     """
     fdir = os.path.join(d, ".loop-review", "findings")
     os.makedirs(fdir, exist_ok=True)
-    hit = [f for f in os.listdir(fdir)
-           if f.startswith(slug + "-") and f.endswith(".md") and not f.endswith(".prev.md")]
-    name = hit[0] if hit else None
-    if name is None:                      # not yet created: derive it the way the script does
-        import hashlib
-        paths = slug.split("__")
-        name = slug + "-" + hashlib.sha256("\0".join(paths).encode()).hexdigest()[:8] + ".md"
-    with open(os.path.join(fdir, name), "w") as f:
+    # Ask the script for the name instead of re-deriving it. The private copy hashed
+    # `slug.split("__")`, which is the flattened stem taken apart again: for a nested area
+    # like `apps/portal/src/lib` that is four paths where the script hashes one, so the file
+    # landed under a name `project close` does not look for — and the case would have failed
+    # as "findings file is missing", pointing at the product for a defect in the fixture.
+    # It also knew nothing of the stem's length cap or its leading-dot stripping.
+    ledger = os.path.join(d, ".loop-review", "project.json")
+    area = None
+    if os.path.exists(ledger):
+        areas = json.load(_io.open(ledger, encoding="utf-8"))["areas"]
+        area = next((x for x in areas if x["status"] == "in_progress"), None)
+    if area is not None:
+        name = module().area_slug(area) + ".md"
+        named = name.rsplit("-", 1)[0]
+        if named != slug:
+            raise AssertionError(f"findings(): area in progress is `{named}`, not `{slug}`")
+    else:
+        hit = [f for f in os.listdir(fdir)
+               if f.startswith(slug + "-") and f.endswith(".md") and not f.endswith(".prev.md")]
+        if not hit:
+            raise AssertionError(f"findings(): no area in progress and no file for `{slug}`")
+        name = hit[0]
+    with open(os.path.join(fdir, name), "w", encoding="utf-8") as f:
         f.write(text)
 
 
@@ -360,6 +375,33 @@ def a_red_check_is_labelled_inherited_or_regressed():
     out = run("pass-start", cwd=d, check=True).stdout + run("status", cwd=d, check=True).stdout
     ok("[regressed]" in out, f"a check green earlier in this loop must read as regressed: {out}")
     ok("[inherited]" in out, "the never-green one must still read as inherited")
+
+
+@case
+def a_nested_area_closes_on_the_findings_file_the_script_names():
+    """The deep-path case the fixtures never reached, product and helper together.
+
+    `findings()` used to rebuild the filename from the flattened stem, splitting a nested
+    path back into four; the name it wrote was not the one `project close` looks for. No case
+    caught it because every fixture area was a single flat directory — the shape that makes
+    the two derivations agree by accident.
+    """
+    d = repo({"apps/portal/src/lib/a.py": "x\n"})
+    run("project", "init", "--report-only", "--", "apps/portal/src/lib", cwd=d, check=True)
+    out = run("project", "next", cwd=d, check=True).stdout
+    printed = out.split("findings file: ")[1].splitlines()[0]
+    pass_through(d, "9.5", "0", "trusted")
+    findings(d, "apps__portal__src__lib", "A. no actionable findings\n")
+    written = [f for f in os.listdir(os.path.join(d, ".loop-review", "findings"))
+               if f.endswith(".md")]
+    ok(written == [os.path.basename(printed)],
+       f"the helper must write the file the script named: {written} vs {printed}")
+    r = run("project", "close", cwd=d)
+    ok(r.returncode == 0, f"and the close must find it: {r.stderr.strip()[:160]}")
+    area = json.load(_io.open(os.path.join(d, ".loop-review", "project.json"),
+                              encoding="utf-8"))["areas"][0]
+    ok(area["status"] == "reviewed" and area["findings_file"],
+       f"the ledger must record the surviving report: {area['status']}, {area['findings_file']}")
 
 
 @case
