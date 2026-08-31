@@ -853,6 +853,42 @@ def a_clean_area_with_its_findings_file_still_closes_accepted():
 
 
 @case
+def a_findings_file_is_never_hidden_by_a_leading_dot():
+    """In report-only that file is the whole deliverable, so it has to be findable.
+
+    The slug was the path with `/` flattened, so the repository root (`.`) produced
+    `.-<hash>.md` and an area like `.github` produced `.github-<hash>.md` — dotfiles that a
+    plain `ls`, a glob copy or an archive step skips, for exactly the artifact `project
+    close` leaves behind after deleting the loop state.
+    """
+    d = repo({".github/w.yml": "on: push\n", "github/b.py": "x\n"})
+    run("project", "init", "--report-only", "--", ".github", "github", cwd=d, check=True)
+    first = run("project", "next", cwd=d, check=True).stdout.split("findings file: ")[1].splitlines()[0]
+    ok(not os.path.basename(first).startswith("."),
+       f"a dotted area must not yield a hidden findings file: {first}")
+    _io.open(os.path.join(d, first), "w").write("A. none\nB. understood\n")
+    run("validate", "--", "true", cwd=d)
+    run("pass-start", cwd=d, check=True)
+    run("pass-record", "--score", "9.5", "--findings", "0", "--understood",
+        "--test-evidence", "trusted", cwd=d, check=True)
+    run("project", "close", cwd=d, check=True)
+    second = run("project", "next", cwd=d, check=True).stdout.split("findings file: ")[1].splitlines()[0]
+    ok(second != first, f"`.github` and `github` must stay distinct: {first} vs {second}")
+    listed = [f for f in os.listdir(os.path.join(d, ".loop-review", "findings"))
+              if not f.startswith(".")]
+    ok(os.path.basename(first) in listed, f"the written report must show in a plain listing: {listed}")
+
+
+@case
+def the_repository_root_as_an_area_is_named_not_dotted():
+    d = repo({"src/a.py": "x\n"})
+    run("project", "init", "--report-only", "--", ".", cwd=d, check=True)
+    out = run("project", "next", cwd=d, check=True).stdout
+    stem = os.path.basename(out.split("findings file: ")[1].splitlines()[0])
+    ok(stem.startswith("root-"), f"the root area must be named `root-<hash>`, got {stem}")
+
+
+@case
 def multi_path_areas_are_one_area_with_a_bounded_slug():
     files = {f"pkg/f{i}.py": "x\n" for i in range(11)}
     d = repo(files)
