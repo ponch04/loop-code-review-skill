@@ -813,6 +813,25 @@ def cmd_validate(a):
     sys.exit(r.returncode)
 
 
+def record_state(hits):
+    """`(kind, phrase)` for a command's latest record on the current state.
+
+    Every `validate-drop` refusal describes this state back to the operator, and each branch
+    phrased it for itself. The inherited branch printed "it does not run here (exit N)" for
+    any record at all, so a check re-run green read as "it does not run here (exit 0)" — a
+    false statement about the very state the message was printed in, on the path where a
+    human is being asked to decide whether to give up evidence.
+    """
+    if not hits:
+        return "absent", "it has not been re-run on the current state"
+    v = hits[-1]
+    if v["exit"] in NEVER_RAN:
+        return "never-ran", f"it cannot start here (exit {v['exit']})"
+    if v["exit"] == 0:
+        return "green", "it is green on the current state"
+    return "failed", f"it ran here and failed (exit {v['exit']})"
+
+
 def cmd_validate_drop(a):
     """Retract a validation record for a command that never executed.
 
@@ -859,10 +878,11 @@ def cmd_validate_drop(a):
         # validation, so anything in that set passed — retiring it weakens the evidence the
         # review was granted on, and that is a human call, never the agent's.
         if not a.force:
-            here = (f"it does not run here (exit {hits[-1]['exit']})" if hits
-                    else "it has not been re-run on the current state")
-            die(f"`{cmd}` was green for pass {lp['n']} and {here}; re-run it, "
-                "or retire it with --force (that weakens the evidence set)")
+            kind, why = record_state(hits)
+            tail = ("retiring it is still a human call (--force), and it costs the review "
+                    "that evidence" if kind == "green" else
+                    "re-run it, or retire it with --force (that weakens the evidence set)")
+            die(f"`{cmd}` carried pass {lp['n']} and {why}; {tail}")
         if hits:
             for v in hits:
                 v["retracted"] = {"at": now(), "reason": a.reason or f"retired: inherited from pass {lp['n']}"}
@@ -877,10 +897,12 @@ def cmd_validate_drop(a):
         print(f"retired `{cmd}` — inherited from pass {lp['n']}")
         print_validation(current_validation(state), state=state)
         return
-    ran = [v for v in hits if v["exit"] not in NEVER_RAN]
-    if ran and not a.force:
-        die(f"`{cmd}` ran and returned exit {ran[-1]['exit']} — that is a result, not a mistake; "
-            "fix it or re-run the command (--force to retract anyway)")
+    kind, why = record_state(hits)
+    if kind in ("green", "failed") and not a.force:
+        advice = ("fix it or re-run the command" if kind == "failed"
+                  else "there is nothing here to retract")
+        die(f"`{cmd}`: {why} — that is a result, not a mistake; {advice} "
+            "(--force to retract anyway)")
     for v in hits:
         v["retracted"] = {"at": now(), "reason": a.reason or ("forced" if a.force else "never ran")}
     save(state)
