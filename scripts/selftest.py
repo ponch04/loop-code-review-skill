@@ -679,6 +679,50 @@ def a_command_that_never_ran_is_droppable_a_failure_is_not():
 
 
 @case
+def validate_drop_describes_the_state_it_refuses_in():
+    """The refusal is read by whoever must decide; it has to be true about the state.
+
+    The inherited branch phrased every case as "it does not run here (exit N)", so a check
+    re-run green produced "it does not run here (exit 0)" — a false statement about the very
+    state the message was printed in, on the path where a human is asked whether to give up
+    evidence. Asserting only the exit code left that invisible: the refusal was correct, and
+    its explanation was not.
+    """
+    d = repo({"src/a.py": "1\n"})
+    write(d, "src/a.py", "2\n")
+    run("init", "--", "src", cwd=d, check=True)
+    run("validate", "--", "echo suite", cwd=d)
+    run("validate", "--", "echo lint", cwd=d)
+    run("pass-start", cwd=d, check=True)
+    run("pass-record", "--score", "7", "--findings", "1", "--understood",
+        "--test-evidence", "trusted", cwd=d, check=True)
+    write(d, "src/a.py", "3\n")
+    run("resolve", "--fixed", "1", cwd=d, check=True)
+    run("validate", "--", "echo lint", cwd=d)
+
+    err = run("validate-drop", "--", "echo suite", cwd=d).stderr        # inherited, not re-run
+    ok("has not been re-run" in err, f"absent: {err.strip()[:160]}")
+
+    run("validate", "--", "echo suite", cwd=d)                          # inherited, green here
+    err = run("validate-drop", "--", "echo suite", cwd=d).stderr
+    ok("green on the current state" in err and "does not run here" not in err,
+       f"a check that just ran green must not be described as not running: {err.strip()[:160]}")
+
+    run("validate", "--", "false", cwd=d)                               # ran and failed
+    err = run("validate-drop", "--", "false", cwd=d).stderr
+    ok("failed (exit 1)" in err, f"failed: {err.strip()[:160]}")
+
+    run("validate", "--", "echo extra", cwd=d)                          # ran green, not inherited
+    err = run("validate-drop", "--", "echo extra", cwd=d).stderr
+    ok("green on the current state" in err and "exit 0" not in err,
+       f"green: {err.strip()[:160]}")
+
+    run("validate", "--", "nosuchtool --x", cwd=d)                      # never started
+    ok(run("validate-drop", "--", "nosuchtool --x", cwd=d).returncode == 0,
+       "a command that never ran and no pass rested on still clears freely")
+
+
+@case
 def a_retirement_holds_until_the_command_is_run_again():
     """Retiring a check is a decision about the check, not about one fingerprint.
 
