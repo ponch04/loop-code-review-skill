@@ -1284,6 +1284,30 @@ def no_text_file_is_opened_at_the_mercy_of_the_platform_locale():
 
 
 @case
+def no_helper_declares_a_parameter_it_never_reads():
+    """A parameter nobody reads is a claim about the code that nothing enforces.
+
+    `findings_are_current(ffile, area)` kept its `area` long after the digest matching that
+    used it was replaced by the `.prev.md` rotation, so both the signature and every call
+    site said the check was tied to the area object while it was a plain existence test.
+    Command functions are exempt: the dispatcher calls every one as `a.fn(a)`, so `a` is
+    part of the contract whether that command needs it or not.
+    """
+    src = _io.open(os.path.join(ROOT, "scripts", "loop_review.py"), encoding="utf-8").read()
+    stale = []
+    for node in ast.walk(ast.parse(src)):
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        read = ({n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
+                | {n.attr for n in ast.walk(node) if isinstance(n, ast.Attribute)})
+        for arg in [a.arg for a in node.args.args + node.args.kwonlyargs]:
+            if arg in read or (arg == "a" and node.name.startswith("cmd_")):
+                continue
+            stale.append(f"{node.name}({arg}) at line {node.lineno}")
+    ok(not stale, "parameter(s) never read: " + "; ".join(stale))
+
+
+@case
 def the_script_carries_no_unreachable_helper():
     """A helper nobody calls is a claim about the workflow that nothing enforces.
 
