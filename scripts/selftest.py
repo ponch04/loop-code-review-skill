@@ -497,6 +497,17 @@ def project_mode_refuses_a_brief_and_a_scope_note_by_name():
     r = run("brief", "--task-brief", "ship it", cwd=d)
     ok(r.returncode != 0 and "--task-brief" in r.stderr,
        f"and still refuse a brief: {r.stderr.strip()[:160]}")
+    # A refusal names what was typed. `--task-brief-file` was folded into `--task-brief` at
+    # both sites, so an operator who supplied a file was answered about a flag they had not
+    # used — and could not tell whether their own was allowed or had simply been ignored.
+    _io.open(os.path.join(d, "brief.md"), "w", encoding="utf-8").write("requirements\n")
+    r = run("brief", "--task-brief-file", "brief.md", cwd=d)
+    ok(r.returncode != 0 and "--task-brief-file" in r.stderr,
+       f"brief must name the file flag it was given: {r.stderr.strip()[:160]}")
+    r = run("init", "--force", "--mode", "project", "--task-brief-file", "brief.md",
+            "--", "pkg", cwd=d)
+    ok(r.returncode != 0 and "--task-brief-file" in r.stderr,
+       f"init must name it too: {r.stderr.strip()[:160]}")
     st = json.load(_io.open(os.path.join(d, ".loop-review", "state.json"), encoding="utf-8"))
     ok(st.get("scope_note") is None, f"nothing may have been recorded: {st.get('scope_note')!r}")
 
