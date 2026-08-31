@@ -1245,6 +1245,18 @@ def cmd_fingerprint(a):
     print(fp_of(load()))
 
 
+def own_artifacts():
+    """Everything inside `.loop-review/` this script creates.
+
+    One list feeds both the removal in `reset` and the "did we make this?" test that decides
+    whether the directory may be removed — asking the question in two places is how they came
+    apart: `project.json.tmp` survived a plain `reset`, and the leftover then made `reset`
+    announce that the directory "holds files this script did not create" about its own crash
+    debris.
+    """
+    return (STATE_FILE, STATE_FILE + ".tmp", PROJECT_FILE, PROJECT_FILE + ".tmp", FINDINGS_DIR)
+
+
 def cmd_reset(a):
     os.chdir(repo_root())
     # An area frees its loop with `project close`, never with `reset`. Resetting inside one
@@ -1274,9 +1286,11 @@ def cmd_reset(a):
             print("project ledger cleared")
         else:
             print("no project ledger to clear")
-    # A `.tmp` can survive a crash between write and replace; it is ours, so clear it too.
-    for f in (STATE_FILE, STATE_FILE + ".tmp", PROJECT_FILE + ".tmp"):
-        if os.path.exists(f) and (f != PROJECT_FILE + ".tmp" or a.project or not os.path.exists(PROJECT_FILE)):
+    # A `.tmp` can survive a crash between write and replace; it is debris, never the file
+    # itself, so both are cleared whatever `--project` says. Only `project.json` is a record
+    # worth keeping, and it is removed above when the operator asked for it.
+    for f in (f for f in own_artifacts() if f.endswith(".tmp") or f == STATE_FILE):
+        if os.path.exists(f):
             os.remove(f)
     # Dropping the loop state of an in-progress area strands the queue: `project next` and
     # a plain `project close` both refuse afterwards, and only `project close --force` can
@@ -1298,7 +1312,7 @@ def cmd_reset(a):
     except OSError:
         # Empty-only by design: rmdir refuses a non-empty directory, and the script has no
         # business deleting anything a user put in there. Missing directory is fine too.
-        ours = {os.path.basename(PROJECT_FILE), os.path.basename(FINDINGS_DIR)}
+        ours = {os.path.basename(f) for f in own_artifacts()}
         if os.path.isdir(STATE_DIR) and not set(os.listdir(STATE_DIR)) <= ours:
             print(f"note: {STATE_DIR}/ kept — it holds files this script did not create")
     print("state cleared")
