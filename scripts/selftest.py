@@ -679,6 +679,36 @@ def a_command_that_never_ran_is_droppable_a_failure_is_not():
 
 
 @case
+def a_metric_the_reviewer_withheld_never_prints_as_none():
+    """`--score` is optional on purpose, so every line that shows one must say so in words.
+
+    The agent may not invent a value the reviewer withheld, which is exactly why `accept` and
+    `status` printed `last score None` and `test-score=None`: a literal that reads as a value
+    and blames the record for a number the reviewer simply never gave. `pass-record` already
+    said "not given" — one site knowing the right wording is what a shared formatter is for.
+    """
+    d = repo({"src/a.py": "1\n"})
+    write(d, "src/a.py", "2\n")
+    run("init", "--", "src", cwd=d, check=True)
+    run("validate", "--", "true", cwd=d)
+    run("pass-start", cwd=d, check=True)
+    out = run("pass-record", "--findings", "0", "--understood", "--test-evidence", "trusted",
+              cwd=d, check=True).stdout
+    ok("not given" in out, f"pass-record must name the missing score: {out.strip()[:160]}")
+    for cmd in (("status",), ("accept",)):
+        r = run(*cmd, cwd=d, check=True)
+        ok("None" not in r.stdout, f"{cmd[0]} must not print a metric as None: {r.stdout.strip()[:200]}")
+        ok("not given" in r.stdout, f"{cmd[0]} must say the score was withheld: {r.stdout.strip()[:200]}")
+    out = run("amend", "--note", "no number from the reviewer", cwd=d, check=True).stdout
+    ok("None" not in out, f"amend must not print a metric as None: {out.strip()[:160]}")
+
+    run("amend", "--score", "9.5", "--test-score", "8", cwd=d, check=True)
+    out = run("status", cwd=d, check=True).stdout
+    ok("score 9.5" in out and "test-score=8" in out and "not given" not in out,
+       f"a recorded score must still print as itself: {out[:200]}")
+
+
+@case
 def report_only_close_refuses_to_read_an_open_pass_as_a_review():
     """Silence is not a verdict — in both modes.
 
