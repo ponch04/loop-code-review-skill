@@ -131,7 +131,9 @@ and judged against `expected_output`. There is no CI.
   blocks acceptance either way: the script cannot tell "fixed next door" from "not fixed at
   all" — the honest answers are `scope --` or making the change — and it must not guess,
   because guessing once let `resolve --fixed` typed before any edit accept the defect itself.
-- **"No executable check applies" is a recordable answer** (`validate --none --reason`), not a
+- **"No executable check applies" is a recordable answer** (`validate --none --reason`), and
+  `validate-drop --none` withdraws it — the record is a claim, not a run, so taking it back
+  only makes the gates stricter. It is not a
   green `true` — which satisfies condition 1 vacuously *and* reaches the reviewer as a check
   the author claims to have run.
 - **Red validation opens a pass in `project` mode, never in task mode.** An inherited area is
