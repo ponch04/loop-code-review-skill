@@ -47,6 +47,7 @@ references/review-dimensions.md     what counts as an actionable finding
 evals/evals.json                    behavioural spec for the agent
 LICENSE                             MIT; keeps the upstream notice this skill derives from
 .gitignore                          .loop-review/ — the skill is run on this repo too
+CLAUDE.md                           symlink to AGENTS.md; one passport, two runtime names
 ```
 
 ## Build and test
@@ -173,6 +174,14 @@ and judged against `expected_output`. There is no CI.
   rather than being deleted.
 
 ## Not a problem — do not file these
+
+- **`CLAUDE.md` alongside `AGENTS.md`.** It is a **symlink** (git mode `120000`, blob content
+  `AGENTS.md`), not a copy: Claude Code looks for one name and Codex for the other, and one
+  file answers both. Reading it through the link is what makes `cmp`/`diff` report two
+  identical passports and a "wrong" heading — there is one file, so the heading is correct
+  and drift is not possible. This has been filed three times; check `git ls-files -s
+  CLAUDE.md` before filing it a fourth. A real copy *would* be a defect, and
+  `scripts/selftest.py` fails if the link is ever replaced by one.
 
 - **No CI and no lint config.** Deliberate: there is nowhere to run them and the artifact
   is a prompt plus a state machine. **`scripts/selftest.py` is the exception, and it is not
