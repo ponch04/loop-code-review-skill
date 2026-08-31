@@ -1605,6 +1605,11 @@ def a_previous_review_is_set_aside_not_reused():
        "the surviving deliverable must be the current review")
     ok(len(prev) == 1 and open(os.path.join(fdir, prev[0])).read().strip() == "first review",
        "and the previous review must be kept, not destroyed")
+    # The rotation is what lets the gate be a plain existence check, and that is what
+    # `references/project-mode.md` promises: a repeat review of an unchanged area may reach
+    # the same verdict word for word. Comparing digests refused exactly that, for ever.
+    ok(review("second review\n").returncode == 0,
+       "an identical verdict on a repeat review must still close the area")
 
 
 @case
