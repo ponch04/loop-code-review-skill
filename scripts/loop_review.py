@@ -1542,7 +1542,7 @@ def cmd_project_next(a):
         print("report-only: record the pass, write the findings file, then `project close` — do not fix")
 
 
-def findings_are_current(ffile, area):
+def findings_are_current(ffile):
     """True when a findings file exists for this review.
 
     `project next` moves any previous review's file to `<slug>.prev.md`, so anything at this
@@ -1632,7 +1632,7 @@ def cmd_project_close(a):
         # the only surviving record of the review — for a clean area it is the *entire*
         # record, and skipping it loses the understanding summary, the test-evidence basis
         # and the score rationale for exactly the areas with no findings to remember them by.
-        if not terminal and not findings_are_current(ffile, cur):
+        if not terminal and not findings_are_current(ffile):
             fixable.append(
                 f"{ffile} is missing — write *this* "
                 "reviewer's whole output there; closing deletes the loop state, so nothing "
@@ -1648,7 +1648,7 @@ def cmd_project_close(a):
         # The findings file is required here for the same reason as in report-only: closing
         # deletes `state.json`, so for a clean area that file is the entire surviving record
         # of the review — its understanding summary, test-evidence basis and score rationale.
-        if r and not findings_are_current(ffile, cur):
+        if r and not findings_are_current(ffile):
             if not a.force:
                 die(f"cannot close area: {ffile} is missing — write this reviewer's whole output there; closing deletes the loop state, so "
                     "nothing else survives (--force closes it as incomplete instead, losing the review)")
