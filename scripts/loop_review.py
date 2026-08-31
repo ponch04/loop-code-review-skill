@@ -1359,8 +1359,20 @@ def loop_is_area(state, area):
 
     `project close` records an outcome from it and `reset` refuses to discard it; both need
     the same answer, and asking it in two ways is how they came to disagree.
+
+    Identity is the area the loop was opened for, stamped at `project next`, never the scope
+    it currently covers. Scope cannot answer it: `scope --` legitimately widens a loop beyond
+    its queued paths, so "the loop covers this area" also matched a *different* area's loop
+    that merely contained these paths — and `project close` signed that review into this
+    area's row without so much as a `--force`. A loop opened before this field existed is
+    still matched by containment; there is nothing else to go on.
     """
-    return state.get("mode") == "project" and set(area_paths(area)) <= set(state.get("scope") or [])
+    if state.get("mode") != "project":
+        return False
+    opened_for = state.get("area")
+    if opened_for is not None:
+        return list(opened_for) == list(area_paths(area))
+    return set(area_paths(area)) <= set(state.get("scope") or [])
 
 
 def area_name(x):
@@ -1526,7 +1538,9 @@ def cmd_project_next(a):
               file=sys.stderr)
         sys.exit(NO_CHANGES)
     state = {
-        "created": now(), "mode": "project", "base": None, "scope": area_paths(nxt),
+        "created": now(), "mode": "project", "base": None,
+        # The queued paths, kept as the loop's identity even if `scope --` widens `scope`.
+        "area": area_paths(nxt), "scope": area_paths(nxt),
         "report_only": p["report_only"], "allow_empty": bool(p.get("allow_empty")),
         "max_passes": p["max_passes"], "passes": [], "validation": [],
     }
