@@ -1247,6 +1247,81 @@ def every_command_in_the_prose_exists_in_the_cli():
     assert_invocations_parse(lines)
 
 
+def stuck_states():
+    """Build each state whose refusal names a way out, and return what it printed.
+
+    Each entry is `(label, repo, failing invocation, stderr)`. Parsing exists in the case
+    below; building the states is here so the list reads as what it is — the recoveries this
+    skill promises an operator who is stuck.
+    """
+    out = []
+
+    d = repo({"a/f.py": "x\n", "b/g.py": "y\n"})              # loop state lost mid-area
+    run("project", "init", "--", "a", "b", cwd=d, check=True)
+    run("project", "next", cwd=d, check=True)
+    os.remove(os.path.join(d, ".loop-review", "state.json"))
+    out.append(("project next, state lost", d, ("project", "next"),
+                run("project", "next", cwd=d).stderr))
+
+    d = repo({"a/f.py": "x\n", "b/g.py": "y\n"})              # the open loop is not this area's
+    run("project", "init", "--", "a", "b", cwd=d, check=True)
+    run("project", "next", cwd=d, check=True)
+    sf = os.path.join(d, ".loop-review", "state.json")
+    st = json.load(_io.open(sf, encoding="utf-8"))
+    st["scope"] = ["b"]
+    json.dump(st, _io.open(sf, "w", encoding="utf-8"), indent=2)
+    out.append(("project close, foreign loop", d, ("project", "close"),
+                run("project", "close", cwd=d).stderr))
+
+    d = repo({"src/a.py": "1\n"})                              # a pass already recorded
+    write(d, "src/a.py", "2\n")
+    run("init", "--", "src", cwd=d, check=True)
+    pass_through(d, "9.5", "0", "trusted")
+    out.append(("pass-record, already recorded", d,
+                ("pass-record", "--score", "9", "--findings", "0", "--test-evidence", "trusted"),
+                run("pass-record", "--score", "9", "--findings", "0",
+                    "--test-evidence", "trusted", cwd=d).stderr))
+
+    d = repo({"src/a.py": "1\n"})                              # a command that never ran
+    write(d, "src/a.py", "2\n")
+    run("init", "--", "src", cwd=d, check=True)
+    run("validate", "--", "definitely-not-a-command", cwd=d)
+    out.append(("pass-start, never-ran check", d, ("pass-start",),
+                run("pass-start", cwd=d).stderr))
+    return out
+
+
+@case
+def a_recommended_recovery_works_in_the_state_that_printed_it():
+    """Parsing a recommendation only proves the flags exist. Running it proves it is a way out.
+
+    `project next` sent an operator whose loop state was lost to `project close`, which is
+    refused for precisely that state a few lines into `project close` — and to
+    `project init --force`, which rebuilds the queue and discards every outcome already
+    earned. Both parse. This case takes the recommendation out of the message the script
+    actually printed and runs it there, so the text and the behaviour are checked together.
+    """
+    for label, d, failing, err in stuck_states():
+        ok(err.strip(), f"{label}: the refusal must say something")
+        named = [b for b in command_hits(err) if b.split()[0] in
+                 ("init", "validate", "validate-drop", "pass-start", "pass-abort", "pass-record",
+                  "amend", "resolve", "accept", "status", "scope", "brief", "reset", "project")]
+        ok(named, f"{label}: the refusal names no way out: {err.strip()[:200]}")
+        # The first named invocation is the one an operator follows. Later ones are
+        # alternatives or warnings ("`reset` here would discard the outcome instead").
+        tokens = shlex.split(named[0])
+        r = run(*tokens, cwd=d)
+        # A message may name a command whose arguments belong to the operator's situation,
+        # not to the message — "retract the record with `validate-drop`" cannot carry the
+        # command being retracted. Refusal for a *missing argument* is therefore allowed;
+        # refusal by a gate is not, and that is the whole difference between a way out and
+        # a detour through a certain "no".
+        incomplete = r.returncode == 2 or " needs " in r.stderr.split("\n")[0]
+        ok(r.returncode == 0 or incomplete,
+           f"{label}: `{' '.join(tokens)}` is named as the way out but the state refuses it: "
+           f"{(r.stderr or r.stdout).strip()[:200]}")
+
+
 @case
 def every_command_the_script_recommends_exists_in_the_cli():
     """A refusal that names the way out is only useful if that way exists.
