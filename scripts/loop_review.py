@@ -1237,8 +1237,14 @@ def cmd_accept(a):
         print("NOT ACCEPTED:")
         for r in reasons:
             print(f"  - {r}")
-        if lp and len(state["passes"]) >= state["max_passes"]:
-            print(f"pass limit reached ({state['max_passes']}) — report as INCOMPLETE")
+        # Not conditioned on a recorded pass: the limit counts passes *opened*, and an
+        # aborted one counts as used. With every pass aborted there is no recorded pass at
+        # all, which is exactly when the operator most needs to be told that the loop has
+        # run out — otherwise the only hint comes from the next `pass-start` refusing.
+        if len(state["passes"]) >= state["max_passes"]:
+            print(f"pass limit reached ({state['max_passes']}) — report as INCOMPLETE"
+                  + ("; every pass was aborted, and an aborted pass counts as used"
+                     if lp is None else ""))
         sys.exit(1)
     print(f"ACCEPTED after {len(state['passes'])} pass(es); "
           f"last score {metric(lp['result']['score'])} (progress signal only)")

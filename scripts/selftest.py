@@ -718,6 +718,38 @@ def a_command_that_never_ran_is_droppable_a_failure_is_not():
 
 
 @case
+def accept_reports_the_pass_limit_even_when_every_pass_was_aborted():
+    """The limit counts passes opened, so the hint must not depend on one being recorded.
+
+    An area whose reviewers were all invalidated mid-flight — the files moved while they read
+    — burns its passes through `pass-abort`, and an aborted pass counts as used. That is the
+    state where the operator most needs to hear that the loop has run out, and it was the one
+    state where `accept` said nothing: the hint required a recorded pass, and there was none.
+    The only warning came from the next `pass-start` refusing.
+    """
+    d = repo({"src/a.py": "1\n"})
+    write(d, "src/a.py", "2\n")                       # the loop needs a scope to review
+    run("init", "--max-passes", "2", "--", "src", cwd=d, check=True)
+    for i in (3, 4):
+        write(d, "src/a.py", f"{i}\n")
+        run("validate", "--", "true", cwd=d)
+        run("pass-start", cwd=d, check=True)
+        run("pass-abort", "--reason", "the area moved mid-review", cwd=d, check=True)
+    r = run("accept", cwd=d)
+    ok(r.returncode != 0, "acceptance must still refuse")
+    ok("pass limit reached (2)" in r.stdout,
+       f"and must say the loop has run out of passes: {r.stdout.strip()[:200]}")
+    ok("aborted" in r.stdout,
+       f"and why there is nothing recorded to show for them: {r.stdout.strip()[:200]}")
+
+    d = repo({"src/a.py": "1\n"})                     # the limit is not mentioned early
+    write(d, "src/a.py", "2\n")
+    run("init", "--max-passes", "5", "--", "src", cwd=d, check=True)
+    ok("pass limit" not in run("accept", cwd=d).stdout,
+       "a loop with passes left must not be told it is out of them")
+
+
+@case
 def amend_refuses_while_a_newer_pass_is_open():
     """`amend` edits the last *recorded* pass, so an open one makes its target the wrong pass.
 
