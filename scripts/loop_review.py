@@ -425,6 +425,23 @@ def is_evidence(v):
     return not v.get("retracted") and not v.get("moved_scope")
 
 
+def is_declaration(v):
+    """True for a `validate --none` record: a claim that no check applies, not a run.
+
+    It satisfies exit condition 1 — the author answered the question honestly — but it is not
+    evidence that anything was executed, so it never joins the set of checks a pass "rested
+    on". Treating it as one inverted the rule it was caught by: replacing the declaration
+    with real tests *grows* the evidence, and `pass-start` refused it as shrinkage, demanding
+    the declaration be re-run or retired with a `--force` the agent may not use.
+    """
+    return v.get("cmd") == NO_CHECK
+
+
+def evidence_set(records):
+    """The commands of `records` that a later pass must carry: real runs, never declarations."""
+    return {c: v for c, v in records.items() if not is_declaration(v)}
+
+
 def validation_view(state, fp=None):
     """The loop's validation state as the gates need it: `(records, retired)`.
 
@@ -470,7 +487,7 @@ def missing_since_last_pass(state):
     lp = last_recorded_pass(state)
     if lp is None or lp["fingerprint"] == state["fingerprint_current"]:
         return []
-    prior = validation_at(state, lp["fingerprint"])
+    prior = evidence_set(validation_at(state, lp["fingerprint"]))
     present, retired = validation_view(state)
     # A retired check is one a human took out of the set; without this the set could only
     # ever grow and `validate-drop` could not do what its message promises.
@@ -516,7 +533,7 @@ def print_validation(cur, header="validation on current state", state=None):
     print(f"{header}: {len(cur)} command(s), " +
           ("GREEN" if cur and all(v["exit"] == 0 for v in cur) else "RED/none"))
     for v in cur:
-        if v["cmd"] == NO_CHECK and v.get("reason"):
+        if is_declaration(v) and v.get("reason"):
             print(f"  - no executable check applies: {v['reason']}")
         elif v["exit"] != 0 and state is not None:
             print(f"  - {v['cmd']}  -> exit {v['exit']}  [{red_provenance(state, v['cmd'])}]")
@@ -850,7 +867,7 @@ def record_state(hits):
     if not hits:
         return "absent", "it has not been re-run on the current state"
     v = hits[-1]
-    if v["cmd"] == NO_CHECK:
+    if is_declaration(v):
         # Not a run at all: the author declared that no executable check applies. Retracting
         # it withdraws a claim, and withdrawing it can only make the gates stricter — with no
         # validation left, `pass-start` and `accept` both refuse.
@@ -891,7 +908,7 @@ def cmd_validate_drop(a):
     # never-ran branch, where a plain `validate-drop` retired it and `pass-start` accepted the
     # shrunken set. A check the review was granted on stays evidence even once the tool that
     # ran it is gone; what changed is the environment, and that is the human's call to weigh.
-    prior = (validation_at(state, lp["fingerprint"])
+    prior = (evidence_set(validation_at(state, lp["fingerprint"]))
              if lp is not None and lp["fingerprint"] != state["fingerprint_current"] else {})
     inherited = cmd in prior
     _, retired = validation_view(state)
