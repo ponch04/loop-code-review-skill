@@ -679,6 +679,54 @@ def a_command_that_never_ran_is_droppable_a_failure_is_not():
 
 
 @case
+def report_only_close_refuses_to_read_an_open_pass_as_a_review():
+    """Silence is not a verdict — in both modes.
+
+    Fix mode meets a dangling pass through `blockers()`; report-only never calls it, so an
+    area with a pass opened and neither recorded nor aborted closed `reviewed`, counted that
+    pass in the ledger, and deleted the state that held it. The reviewer's verdict was never
+    transcribed, and the row said the area had been reviewed.
+    """
+    d = repo({"pkg/a.py": "x\n"})
+    run("project", "init", "--report-only", "--", "pkg", cwd=d, check=True)
+    stem = run("project", "next", cwd=d, check=True).stdout.split("findings file: ")[1].splitlines()[0]
+    pass_through(d, "8", "1", "trusted")
+    _io.open(os.path.join(d, stem), "w").write("A. one finding\n")
+
+    write(d, "pkg/a.py", "y\n")                        # a second pass is opened...
+    run("validate", "--", "true", cwd=d)
+    run("pass-start", cwd=d, check=True)
+    sh("git checkout -- pkg/a.py", d)                  # ...and the area returns to the reviewed state
+    r = run("project", "close", cwd=d, check=True)
+    area = json.load(_io.open(os.path.join(d, ".loop-review", "project.json"),
+                              encoding="utf-8"))["areas"][0]
+    ok(area["status"] == "incomplete",
+       f"an unrecorded pass must not read as a completed review, got {area['status']}")
+    ok(any("neither recorded nor aborted" in b for b in area["blockers"]),
+       f"and the reason must name it: {area['blockers']}")
+
+
+@case
+def report_only_close_accepts_a_pass_that_was_properly_aborted():
+    """The other side: `pass-abort` is the documented exit, so it must actually close one."""
+    d = repo({"pkg/a.py": "x\n"})
+    run("project", "init", "--report-only", "--", "pkg", cwd=d, check=True)
+    stem = run("project", "next", cwd=d, check=True).stdout.split("findings file: ")[1].splitlines()[0]
+    pass_through(d, "8", "1", "trusted")
+    _io.open(os.path.join(d, stem), "w").write("A. one finding\n")
+    write(d, "pkg/a.py", "y\n")
+    run("validate", "--", "true", cwd=d)
+    run("pass-start", cwd=d, check=True)
+    sh("git checkout -- pkg/a.py", d)
+    run("pass-abort", "--reason", "the area moved mid-review", cwd=d, check=True)
+    run("project", "close", cwd=d, check=True)
+    area = json.load(_io.open(os.path.join(d, ".loop-review", "project.json"),
+                              encoding="utf-8"))["areas"][0]
+    ok(area["status"] == "reviewed" and not area["blockers"],
+       f"an aborted pass must not block the close: {area['status']}, {area['blockers']}")
+
+
+@case
 def reset_clears_its_own_debris_and_says_so_only_about_a_stranger():
     """What `reset` removes and what it calls "not ours" must come from one list.
 
