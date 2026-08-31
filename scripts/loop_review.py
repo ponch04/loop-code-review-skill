@@ -804,9 +804,27 @@ def cmd_scope(a):
               "a new pass so a reviewer actually sees the added paths")
 
 
+def check_none_or_command(a, verb, empty_hint):
+    """`--none` is about the declaration, a command after `--` is about a run: exactly one.
+
+    `validate-drop` refused both-at-once; `validate` did not, and `validate --none --reason X
+    -- pytest -q` silently recorded "no executable check applies" while dropping the command
+    the operator wrote. That is worse than a rejected typo: the loop then tells the reviewer
+    there was nothing to run, on a surface that has a test suite.
+    """
+    if a.none and a.command:
+        die(f"{verb} takes --none or a command after `--`, not both: `--none` records that "
+            "no executable check applies, a command names one to run")
+    if not a.none and not a.command:
+        die(empty_hint)
+
+
 def cmd_validate(a):
     os.chdir(repo_root())
     state = load()
+    check_none_or_command(a, "validate",
+                          "validate needs a command after `--`, or `--none --reason ...` "
+                          "when none applies")
     if a.none:
         # An inherited area of prose, config or fixtures has no test, typecheck, lint or
         # build. `pass-start` refuses without a validation record and `--force` does not
@@ -826,8 +844,6 @@ def cmd_validate(a):
         print("tell the reviewer exactly this in the validation section of its prompt; "
               "do not present it as a check that passed")
         return
-    if not a.command:
-        die("validate needs a command after `--`, or `--none --reason ...` when none applies")
     cmd = join_cmd(a.command)
     before = fp_of(state)
     print(f"$ {cmd}", flush=True)
@@ -890,11 +906,9 @@ def cmd_validate_drop(a):
     """
     os.chdir(repo_root())
     state = load()
-    if a.none and a.command:
-        die("validate-drop takes --none or a command after `--`, not both")
-    if not a.command and not a.none:
-        die("validate-drop needs a command after `--`, or --none to withdraw a "
-            "`validate --none` record")
+    check_none_or_command(a, "validate-drop",
+                          "validate-drop needs a command after `--`, or --none to withdraw "
+                          "a `validate --none` record")
     # `--none` names the same record `validate --none` wrote. Without it the only way to
     # withdraw a mistaken declaration was to type the script's internal marker verbatim.
     cmd = NO_CHECK if a.none else join_cmd(a.command)
