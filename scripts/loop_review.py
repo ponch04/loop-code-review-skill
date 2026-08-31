@@ -1136,6 +1136,14 @@ def cmd_amend(a):
     """
     os.chdir(repo_root())
     state = load()
+    op = open_pass(state)
+    if op is not None:
+        # `amend` edits the last *recorded* pass, so with a newer pass open it silently
+        # rewrote a review the open one supersedes — while the output the operator was
+        # holding almost certainly belonged to the open pass. Nothing gates on a superseded
+        # record either, so the edit changed nothing except what `status` reports.
+        die(f"pass {op['n']} is open — `pass-record` states its verdict, `pass-abort` "
+            "discards it. `amend` only edits the last recorded pass, which that one supersedes.")
     lp = last_recorded_pass(state)
     if lp is None:
         die("no recorded pass to amend")

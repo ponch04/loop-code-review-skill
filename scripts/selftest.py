@@ -718,6 +718,37 @@ def a_command_that_never_ran_is_droppable_a_failure_is_not():
 
 
 @case
+def amend_refuses_while_a_newer_pass_is_open():
+    """`amend` edits the last *recorded* pass, so an open one makes its target the wrong pass.
+
+    The output an operator holds while a pass is open belongs to that pass; `amend` wrote it
+    into the review the open pass supersedes and said "pass 1 amended" for a pass 2 that was
+    empty. Nothing gates on a superseded record, so the edit changed only what `status`
+    reports — a finding count raised on a review no longer under consideration.
+    """
+    d = repo({"src/a.py": "1\n"})
+    write(d, "src/a.py", "2\n")
+    run("init", "--", "src", cwd=d, check=True)
+    pass_through(d, "7", "1", "trusted")
+    write(d, "src/a.py", "3\n")
+    run("resolve", "--fixed", "1", cwd=d, check=True)
+    run("validate", "--", "true", cwd=d)
+    run("pass-start", cwd=d, check=True)                   # pass 2 open
+
+    r = run("amend", "--score", "9.5", "--findings", "3", cwd=d)
+    ok(r.returncode != 0 and "pass 2 is open" in r.stderr,
+       f"amend must refuse while a newer pass is open: rc={r.returncode} {r.stderr.strip()[:160]}")
+    st = json.load(_io.open(os.path.join(d, ".loop-review", "state.json"), encoding="utf-8"))
+    ok(st["passes"][0]["result"]["findings"] == 1,
+       f"and must not have touched the superseded pass: {st['passes'][0]['result']}")
+
+    run("pass-record", "--findings", "0", "--understood", "--test-evidence", "trusted",
+        cwd=d, check=True)
+    out = run("amend", "--score", "9.5", cwd=d, check=True).stdout
+    ok("pass 2 amended" in out, f"once recorded, amend targets that pass: {out.strip()[:160]}")
+
+
+@case
 def a_metric_the_reviewer_withheld_never_prints_as_none():
     """`--score` is optional on purpose, so every line that shows one must say so in words.
 
