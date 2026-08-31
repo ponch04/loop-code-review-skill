@@ -413,19 +413,45 @@ def last_recorded_pass(state):
     return next((x for x in reversed(state["passes"]) if x.get("result")), None)
 
 
-def validation_at(state, fp):
-    """Validation runs at fingerprint `fp`, latest non-retracted result per command.
+def is_evidence(v):
+    """True when a validation record can stand for the state it was made on.
 
-    Re-running the same command on unchanged files supersedes its earlier result, so a
-    flaky or environment failure can be cleared by re-running it — not only by editing.
-    Distinct commands are tracked separately: a green re-run of the tests does not
-    absolve a red lint.
+    A retracted record was withdrawn; a `moved_scope` one edited the files while checking
+    them and so describes neither the state before nor the state after. Every gate that
+    reads validation asks this one question, in one place — asking it separately per gate is
+    how `red_provenance` came to count a voided run as proof a check had once been green.
     """
-    latest = {}
+    return not v.get("retracted") and not v.get("moved_scope")
+
+
+def validation_view(state, fp=None):
+    """The loop's validation state as the gates need it: `(records, retired)`.
+
+    `records` maps each command to its latest usable run **at `fp`** (default: the current
+    fingerprint). Re-running a command on unchanged files supersedes its earlier result, so
+    a flaky or environment failure clears by re-running — not only by editing — and distinct
+    commands stay separate: a green re-run of the tests does not absolve a red lint.
+
+    `retired` holds the commands whose most recent event in the whole loop is a retirement.
+    That is deliberately *not* scoped to a fingerprint: retiring a check is a decision about
+    the check, made once by a human with `validate-drop --force`, and it holds until the
+    command is run again. Keyed by fingerprint instead, the decision evaporated at the next
+    edit and `pass-start` demanded the same `--force` over again — turning the escape hatch
+    into a routine keystroke, which is exactly how an escape hatch stops meaning anything.
+    """
+    fp = state["fingerprint_current"] if fp is None else fp
+    at_fp, last_event = {}, {}
     for v in state["validation"]:
-        if v["fingerprint"] == fp and not v.get("retracted") and not v.get("moved_scope"):
-            latest[v["cmd"]] = v
-    return latest
+        # Append-only, so list order is chronological: a later run of a command supersedes
+        # its retirement, and a retirement supersedes the run it was stamped on.
+        last_event[v["cmd"]] = v
+        if v["fingerprint"] == fp and is_evidence(v):
+            at_fp[v["cmd"]] = v
+    return at_fp, {c for c, v in last_event.items() if v.get("retracted")}
+
+
+def validation_at(state, fp):
+    return validation_view(state, fp)[0]
 
 
 def current_validation(state):
@@ -444,12 +470,9 @@ def missing_since_last_pass(state):
     if lp is None or lp["fingerprint"] == state["fingerprint_current"]:
         return []
     prior = validation_at(state, lp["fingerprint"])
-    present = validation_at(state, state["fingerprint_current"])
-    # A record retracted on the current state is a deliberate retirement of that check —
-    # the command does not exist here any more (or a human forced it). Without this the
-    # set could only ever grow, and `validate-drop` could not do what its message promises.
-    retired = {v["cmd"] for v in state["validation"]
-               if v["fingerprint"] == state["fingerprint_current"] and v.get("retracted")}
+    present, retired = validation_view(state)
+    # A retired check is one a human took out of the set; without this the set could only
+    # ever grow and `validate-drop` could not do what its message promises.
     return [c for c in prior if c not in present and c not in retired]
 
 
@@ -462,15 +485,11 @@ def red_provenance(state, cmd):
     the area you inherited" hands it the wrong conclusion about the very code it is there to
     judge. The loop's own history answers this, so the agent never has to remember it.
     """
+    # `is_evidence` is what keeps this honest: a `moved_scope` run cannot establish that the
+    # check was ever green, and `regressed` tells a fresh reviewer that the change under
+    # review broke it — a conclusion no voided run may support.
     for v in state["validation"]:
-        # `moved_scope` runs are excluded for the same reason every other gate excludes them:
-        # a command that edited the files while checking them is evidence for neither state,
-        # so it cannot establish that the check was ever green here. Counting it did more
-        # than mislabel: `regressed` tells a fresh reviewer the change under review broke
-        # this check, and the only thing that "proved" it was green was a run whose result
-        # the loop had already declared void.
-        if (v["cmd"] == cmd and v["exit"] == 0
-                and not v.get("retracted") and not v.get("moved_scope")):
+        if v["cmd"] == cmd and v["exit"] == 0 and is_evidence(v):
             return "regressed"
     return "inherited"
 
@@ -807,6 +826,12 @@ def cmd_validate_drop(a):
     prior = (validation_at(state, lp["fingerprint"])
              if lp is not None and lp["fingerprint"] != state["fingerprint_current"] else {})
     inherited = cmd in prior
+    _, retired = validation_view(state)
+    if cmd in retired and not hits:
+        # Already out of the set and still out — the retirement holds until the command is
+        # run again. Saying "no validation record" here sent the operator to re-force a
+        # decision that was never undone.
+        die(f"`{cmd}` is already retired; it stays out of the set until it is run again")
     if not hits and not inherited:
         print(f"loop-review: no validation record for `{cmd}` at the current state", file=sys.stderr)
         cur = current_validation(state)

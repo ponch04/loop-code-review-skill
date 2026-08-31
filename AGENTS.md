@@ -100,7 +100,10 @@ and judged against `expected_output`. There is no CI.
   commit id at `init`, never kept symbolic. Validation from another fingerprint is not
   evidence; a review of an unchanged fingerprint is not a new pass; within one fingerprint
   the latest run of each command wins, and distinct commands are never conflated. Evidence
-  may not shrink: a new pass carries every check the previous one rested on.
+  may not shrink: a new pass carries every check the previous one rested on. Retiring one is
+  the exception, and it is a decision about the *check*, not about a state: it holds until
+  that command is run again. Keyed to a fingerprint it evaporated at the next edit, and the
+  human `--force` behind it decayed into a keystroke the agent repeats.
 - **Reviewer context isolation is the product.** The reviewer receives the filled prompt and
   nothing else — no author rationale, no suspected issues, no prior reviewer output, and
   never `.loop-review/`. Exactly two things cross that boundary: the task brief (requirements

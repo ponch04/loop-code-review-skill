@@ -583,6 +583,56 @@ def a_command_that_never_ran_is_droppable_a_failure_is_not():
 
 
 @case
+def a_retirement_holds_until_the_command_is_run_again():
+    """Retiring a check is a decision about the check, not about one fingerprint.
+
+    `retired` was read at the current fingerprint only, so a `validate-drop --force` made on
+    one state vanished at the next edit and `pass-start` demanded the same `--force` again.
+    Nothing was blocked for good, which is the point: the human escape hatch degraded into a
+    keystroke the agent repeats reflexively, and a hatch pressed by reflex has stopped being
+    a decision. It ends the moment the command is run again — that supersedes it.
+    """
+    d = repo({"src/a.py": "1\n"})
+    write(d, "src/a.py", "2\n")
+    run("init", "--", "src", cwd=d, check=True)
+    run("validate", "--", "echo suite", cwd=d)
+    run("validate", "--", "echo lint", cwd=d)
+    run("pass-start", cwd=d, check=True)
+    run("pass-record", "--score", "7", "--findings", "1", "--understood",
+        "--test-evidence", "trusted", cwd=d, check=True)
+    write(d, "src/a.py", "3\n")                           # fix batch
+    run("resolve", "--fixed", "1", cwd=d, check=True)
+    run("validate", "--", "echo lint", cwd=d)
+    run("validate-drop", "--force", "--reason", "suite folded into lint", "--", "echo suite",
+        cwd=d, check=True)
+
+    write(d, "src/a.py", "4\n")                           # one more edit before the pass
+    run("validate", "--", "echo lint", cwd=d)
+    r = run("pass-start", cwd=d)
+    ok(r.returncode == 0,
+       f"an edit must not undo a retirement: {r.stderr.strip()[:200]}")
+    r = run("validate-drop", "--force", "--", "echo suite", cwd=d)
+    ok(r.returncode != 0 and "already retired" in r.stderr,
+       f"re-forcing a standing decision must be refused as such: {r.stderr.strip()[:160]}")
+
+    run("pass-record", "--score", "9", "--findings", "1", "--understood",
+        "--test-evidence", "trusted", cwd=d, check=True)
+    write(d, "src/a.py", "5\n")
+    run("resolve", "--fixed", "1", cwd=d, check=True)
+    run("validate", "--", "echo lint", cwd=d)
+    run("validate", "--", "echo suite", cwd=d)             # run again: retirement ends
+    run("pass-start", cwd=d, check=True)
+    run("pass-record", "--score", "9", "--findings", "1", "--understood",
+        "--test-evidence", "trusted", cwd=d, check=True)
+    write(d, "src/a.py", "6\n")
+    run("resolve", "--fixed", "1", cwd=d, check=True)
+    run("validate", "--", "echo lint", cwd=d)
+    r = run("pass-start", cwd=d)
+    ok(r.returncode != 0 and "echo suite" in r.stderr,
+       f"a check run again is back in the set and must be demanded: {r.stderr.strip()[:200]}")
+
+
+@case
 def an_inherited_check_cannot_be_retired_by_letting_it_fail_to_start():
     """The evidence set may only shrink by a human decision — from every direction.
 
