@@ -1270,22 +1270,26 @@ def multi_path_areas_are_one_area_with_a_bounded_slug():
 
 
 @case
-def a_dangling_glue_operator_is_refused_at_either_end():
-    """`+` joins two paths, so an end of the list is not a place it can do its job.
+def a_glue_operator_missing_a_path_is_refused_wherever_it_sits():
+    """`+` joins the path on its left to the one on its right — every position where one of
+    those is missing is the same fault, and each was found separately.
 
-    A leading `+` was refused from the start; a trailing one was dropped in silence, and
-    dropping it changes the queue rather than just the wording — `a b +` queued two separate
-    areas where the operator asked for a join, and nothing in the output said a token had
-    been ignored. The refusal has to be symmetric, and it must not cost the valid forms.
+    Leading was refused from the start; trailing was dropped in silence, queueing two areas
+    where the operator asked for one; `+ +` glued the two paths around it, which is also what
+    a command line that lost a path between them looks like. Each refusal is asserted by its
+    reason, not by a non-zero exit: three different faults answered by one message would read
+    as coverage while two of them went unchecked.
     """
     d = repo({"a/x.py": "1\n", "b/y.py": "2\n"})
-    r = run("project", "init", "--", "a", "b", "+", cwd=d)
-    ok(r.returncode != 0 and "+" in r.stderr,
-       f"a trailing `+` must be refused, not dropped: rc={r.returncode} {r.stderr.strip()[:120]}")
-    ok(not os.path.exists(os.path.join(d, ".loop-review", "project.json")),
-       "and a refused queue must not be written to the ledger")
-    r = run("project", "init", "--", "+", "a", cwd=d)
-    ok(r.returncode != 0, "a leading `+` must still be refused")
+    for args, reason in ((("a", "b", "+"), "cannot end the list"),
+                         (("+", "a"), "cannot open the list"),
+                         (("a", "+", "+", "b"), "is missing"),
+                         (("a", "+", "+"), "is missing")):
+        r = run("project", "init", "--", *args, cwd=d)
+        ok(r.returncode != 0 and reason in r.stderr,
+           f"`{' '.join(args)}` must be refused for `{reason}`: rc={r.returncode} {r.stderr.strip()[:120]}")
+        ok(not os.path.exists(os.path.join(d, ".loop-review", "project.json")),
+           f"`{' '.join(args)}`: a refused queue must not be written to the ledger")
 
     r = run("project", "init", "--", "a", "+", "b", cwd=d, check=True)
     ok(r.stdout.count("\n  - ") == 1, "the glued form must still queue one area")

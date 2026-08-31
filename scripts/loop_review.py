@@ -1402,26 +1402,39 @@ def area_slug(x):
     return (stem[:80] if len(stem) > 80 else stem) + "-" + tail
 
 
+def check_glue(raw):
+    """The `+` grammar, checked as a whole before a single path is resolved.
+
+    `+` joins the path on its left to the one on its right, so every position where one of
+    those is missing is the same fault, and each was found separately: a leading `+` was
+    refused from the start, a trailing one was dropped in silence until it was reported, and
+    `+ +` still passed — quietly gluing the two paths around it, which is also what a command
+    line that *lost a path between them* looks like. Whatever the operator meant, the queue
+    they get is not the one they wrote, and the areas decide what gets reviewed.
+    """
+    prev = None
+    for tok in raw:
+        if tok == "+":
+            if prev is None:
+                die("`+` must follow a path; it cannot open the list")
+            if prev == "+":
+                die("`+ +` is not an operator — a path between them is missing")
+        prev = tok
+    if prev == "+":
+        die("`+` must join two paths; it cannot end the list")
+
+
 def parse_areas(raw, root):
     """`--` paths form areas; a standalone `+` glues neighbours into one multi-path area.
 
     `a b + c d` -> [a], [b, c], [d]. A flat package split across files, or sibling edge
     functions grouped by meaning, are one area even though they are several paths.
     """
-    # Checked before any path is resolved, and symmetric with the leading case below: a
-    # trailing `+` has no neighbour on its right, so the join it asks for cannot happen.
-    # Dropping it silently changed the queue itself — `a b +` became two areas where the
-    # operator said one — and nothing in the output said the token had been ignored.
-    if raw and raw[-1] == "+":
-        die("`+` must join two paths; it cannot end the list")
-    areas, cur = [], []
+    check_glue(raw)
+    areas, cur, prev = [], [], None
     for tok in raw:
-        if tok == "+":
-            if not cur:
-                die("`+` must follow a path")
-        else:
-            continue_last = bool(cur) and prev == "+"
-            if not continue_last and cur:
+        if tok != "+":
+            if cur and prev != "+":
                 areas.append(cur)
                 cur = []
             cur.append(to_repo_relative(tok, root))
