@@ -64,8 +64,10 @@ that edited what it validated, `validate-drop`'s never-ran-vs-ran distinction, o
 arguments, `amend` lowering findings, an interrupted state write, report-only close without
 a findings file. Every invocation the CLI *recommends* is parsed too — the prose in the docs
 and the commands quoted in the script's own `die()`/`print()` messages alike: `project close`
-sent the operator to a `--force` flag that `reset` has never had, and only the parser saw it. A
-happy-path smoke is worthless here: one stayed green while three fixed defects were reverted. Any change to a gate adds or updates a case in the same commit, and
+sent the operator to a `--force` flag that `reset` has never had, and only the parser saw it.
+Parsing is not enough on its own: a recommendation is also *run in the state that printed it*,
+because `project next` named a `project close` that the very next command refuses for exactly
+that state. A happy-path smoke is worthless here: one stayed green while three fixed defects were reverted. Any change to a gate adds or updates a case in the same commit, and
 a new case must be shown to fail on the defect it covers before it is trusted.
 
 Assert the blocker, not the exit code. A case that checks only `returncode != 0` is usually

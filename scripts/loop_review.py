@@ -1412,7 +1412,13 @@ def cmd_project_next(a):
         die("an area loop is still open; `project close` it before moving on")
     cur = next((x for x in p["areas"] if x["status"] == "in_progress"), None)
     if cur:
-        die(f"area `{area_name(cur)}` is in_progress but has no state; `project close` it or `project init --force`")
+        # `project close` alone cannot settle this: it is refused for exactly this state, a
+        # few lines into `cmd_project_close`. Naming it sent the operator through a certain
+        # refusal to reach the flag, or worse to `project init --force`, which rebuilds the
+        # queue and discards every outcome already earned.
+        die(f"area `{area_name(cur)}` is in_progress but its loop state is gone; "
+            "`project close --force` settles it `incomplete` and the queue continues "
+            "(`project init --force` would rebuild the queue and lose the outcomes already recorded)")
     nxt = next((x for x in p["areas"] if x["status"] == "pending"), None)
     if nxt is None:
         print("no pending areas — project review complete; `project status` for the ledger")
