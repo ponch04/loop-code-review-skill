@@ -1593,7 +1593,14 @@ def cmd_project_close(a):
         # not fixable by refusing: it is recorded `incomplete` with its blockers and the
         # queue moves on, exactly as fix mode settles a failed area without a hatch.
         terminal = []
-        if r is None:
+        op = open_pass(state)
+        if op is not None:
+            # Fix mode reaches this through `blockers()`; report-only never calls it, so the
+            # same dangling pass closed the area `reviewed` and counted itself in `passes`.
+            # An open pass is a review whose verdict was never transcribed — `pass-record`
+            # states it, `pass-abort` discards it, and silence is neither.
+            terminal.append(f"pass {op['n']} opened but neither recorded nor aborted")
+        elif r is None:
             terminal.append("no recorded pass")
         elif not r["understood"]:
             terminal.append("reviewer did not demonstrate a credible understanding")
