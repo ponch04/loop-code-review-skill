@@ -523,22 +523,30 @@ def metric(value, absent="not given"):
     return absent if value is None else value
 
 
-def print_validation(cur, header="validation on current state", state=None):
-    """One rendering of validation state for every text-mode command.
+def print_validation(cur, header="validation on current state", state=None, file=None):
+    """One rendering of validation state for every text-mode command, diagnostics included.
 
     `references/reviewer-prompt.md` is filled from `status`, and its validation section
     needs each command with its exit code — an aggregate GREEN/RED line cannot be
     transcribed into the reviewer's prompt.
+
+    `file` exists so refusals printed to stderr use this renderer instead of writing their
+    own loop. One of them did, and printed a `validate --none` record as
+    `<no executable check applies> -> exit 0` — a declaration that nothing was run, dressed
+    as a command that ran and passed, in the very list an operator reads to decide what to
+    retract.
     """
+    out = sys.stdout if file is None else file
     print(f"{header}: {len(cur)} command(s), " +
-          ("GREEN" if cur and all(v["exit"] == 0 for v in cur) else "RED/none"))
+          ("GREEN" if cur and all(v["exit"] == 0 for v in cur) else "RED/none"), file=out)
     for v in cur:
-        if is_declaration(v) and v.get("reason"):
-            print(f"  - no executable check applies: {v['reason']}")
+        if is_declaration(v):
+            print(f"  - no executable check applies"
+                  + (f": {v['reason']}" if v.get("reason") else ""), file=out)
         elif v["exit"] != 0 and state is not None:
-            print(f"  - {v['cmd']}  -> exit {v['exit']}  [{red_provenance(state, v['cmd'])}]")
+            print(f"  - {v['cmd']}  -> exit {v['exit']}  [{red_provenance(state, v['cmd'])}]", file=out)
         else:
-            print(f"  - {v['cmd']}  -> exit {v['exit']}")
+            print(f"  - {v['cmd']}  -> exit {v['exit']}", file=out)
 
 
 def review_integrity(state, phrasing="loop"):
@@ -961,9 +969,7 @@ def cmd_validate_drop(a):
         print(f"loop-review: no validation record for `{cmd}` at the current state", file=sys.stderr)
         cur = current_validation(state)
         if cur:
-            print("recorded commands:", file=sys.stderr)
-            for v in cur:
-                print(f"  - {v['cmd']}  -> exit {v['exit']}", file=sys.stderr)
+            print_validation(cur, "recorded on the current state", state, file=sys.stderr)
         sys.exit(1)
     if inherited:
         # A check carried over from the last pass. `pass-start` only opens a pass on green
@@ -1061,9 +1067,7 @@ def cmd_pass_start(a):
         print("note: opening a project pass over red validation. Tell the reviewer which is "
               "which — an inherited failure is a property of the area, a regressed one was "
               "broken inside this loop and is about the change:", file=sys.stderr)
-        for v in red:
-            print(f"  - {v['cmd']} -> exit {v['exit']}  [{red_provenance(state, v['cmd'])}]",
-                  file=sys.stderr)
+        print_validation(red, "failing checks", state, file=sys.stderr)
         print("  in report-only write them into the findings file; in fix mode they still "
               "block `accept`, so fix them or close the area incomplete with them as the "
               "blocker", file=sys.stderr)

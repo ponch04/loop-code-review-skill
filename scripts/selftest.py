@@ -1027,6 +1027,32 @@ def replacing_a_no_check_declaration_with_real_checks_is_not_shrinkage():
 
 
 @case
+def a_declaration_is_never_rendered_as_a_command_that_passed():
+    """Every list of validation records goes through one renderer, diagnostics included.
+
+    `validate-drop`'s "recorded commands" list wrote its own loop and printed a `validate
+    --none` record as `<no executable check applies> -> exit 0`: a declaration that nothing
+    was run, dressed as a command that ran and passed — in the very list an operator reads to
+    decide what to retract. `print_validation` had always rendered it as the claim it is.
+    """
+    d = repo({"src/a.py": "1\n"})
+    write(d, "src/a.py", "2\n")
+    run("init", "--", "src", cwd=d, check=True)
+    run("validate", "--none", "--reason", "documentation only", cwd=d, check=True)
+    run("validate", "--", "echo lint", cwd=d)
+    err = run("validate-drop", "--", "pytest -q", cwd=d).stderr
+    ok("no executable check applies: documentation only" in err,
+       f"the declaration must read as a claim: {err.strip()[:200]}")
+    ok("exit 0" not in err.split("no executable check applies")[1].split("\n")[0],
+       f"and never as a command that exited 0: {err.strip()[:200]}")
+    ok("echo lint  -> exit 0" in err, f"while a real run still shows its code: {err.strip()[:200]}")
+
+    out = run("status", cwd=d, check=True).stdout
+    ok("no executable check applies: documentation only" in out,
+       f"status renders it the same way: {out[:200]}")
+
+
+@case
 def none_and_a_command_are_refused_together_by_both_validate_commands():
     """`--none` is about the declaration, a command after `--` is about a run: exactly one.
 
