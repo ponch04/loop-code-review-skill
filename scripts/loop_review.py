@@ -541,27 +541,55 @@ def print_validation(cur, header="validation on current state", state=None):
             print(f"  - {v['cmd']}  -> exit {v['exit']}")
 
 
-def blockers(state):
-    """Return list of reasons acceptance is not possible. Empty list == accepted."""
-    reasons = []
+def review_integrity(state, phrasing="loop"):
+    """What makes a review not a review, in either mode: the list both gates read.
+
+    `blockers()` adds the acceptance-only checks on top; report-only `project close` uses
+    this alone, because nothing there is meant to be fixed. They were two hand-written lists
+    and they drifted twice, always in the same direction — a condition reached one side and
+    not the other. The open-pass check arrived in report-only long after `blockers()` had it,
+    and the `allow_empty` exemption never arrived at all, so an area queued deliberately
+    empty closed `incomplete` however carefully its report was written.
+
+    `phrasing` only selects wording: an area reviewer is told about "the area", a task loop
+    about "the scope". The conditions are the same, and that is the point.
+    """
+    area = phrasing == "area"
+    out = []
     # Checked here, not only at `init`. A scope can empty *after* the loop starts — the work
     # is committed, a change is reverted or stashed, an area's directory is deleted — and
     # from that moment the loop reviews nothing while passing every gate exactly as it would
     # on an empty `init`. In project mode the lie then outlives the loop in the ledger.
     if not state.get("allow_empty") and scope_is_empty(state["scope"], state.get("mode", "changes"),
                                                        state.get("base")):
-        reasons.append("the scope is empty now — nothing is under review "
-                       "(reverted, stashed, committed, or the area's files are gone)")
+        out.append("the area's files are gone; the review describes nothing" if area else
+                   "the scope is empty now — nothing is under review "
+                   "(reverted, stashed, committed, or the area's files are gone)")
     op = open_pass(state)
     if op:
-        reasons.append(f"pass {op['n']} opened but not recorded (pass-record, or pass-abort if it is stale)")
-        return reasons
+        out.append(f"pass {op['n']} opened but neither recorded nor aborted" if area else
+                   f"pass {op['n']} opened but not recorded (pass-record, or pass-abort if it is stale)")
+        return out
     lp = last_recorded_pass(state)
     if lp is None:
-        reasons.append("no full-review pass recorded")
-        return reasons
+        out.append("no recorded pass" if area else "no full-review pass recorded")
+        return out
     if state["fingerprint_current"] != lp["fingerprint"]:
-        reasons.append("scoped changes moved since the last pass; review is stale")
+        out.append("the area moved since the pass; the review describes code that is no "
+                   "longer there" if area else
+                   "scoped changes moved since the last pass; review is stale")
+    if not lp["result"]["understood"]:
+        out.append("reviewer did not demonstrate a credible understanding"
+                   + ("" if area else " of the change"))
+    return out
+
+
+def blockers(state):
+    """Return list of reasons acceptance is not possible. Empty list == accepted."""
+    reasons = review_integrity(state)
+    lp = last_recorded_pass(state)
+    if lp is None or lp.get("result") is None:
+        return reasons
     cur = current_validation(state)
     red = [v for v in cur if v["exit"] != 0]
     if not cur:
@@ -584,8 +612,6 @@ def blockers(state):
             reasons.append("the scope is on the state the review found defective — the "
                            "recorded fixes are not present (never made, reverted, stashed, "
                            "checked out, or landed outside the scope: widen it with `scope --`)")
-    if not lp["result"]["understood"]:
-        reasons.append("reviewer did not demonstrate a credible understanding of the change")
     evidence = lp["result"].get("test_evidence")
     if evidence is None:
         reasons.append(f"test evidence not assessed for pass {lp['n']} (record it with `amend --test-evidence ...`)")
@@ -1711,26 +1737,12 @@ def cmd_project_close(a):
         # the state that holds it is deleted. An area that never produced a usable pass is
         # not fixable by refusing: it is recorded `incomplete` with its blockers and the
         # queue moves on, exactly as fix mode settles a failed area without a hatch.
-        terminal = []
-        op = open_pass(state)
-        if op is not None:
-            # Fix mode reaches this through `blockers()`; report-only never calls it, so the
-            # same dangling pass closed the area `reviewed` and counted itself in `passes`.
-            # An open pass is a review whose verdict was never transcribed — `pass-record`
-            # states it, `pass-abort` discards it, and silence is neither.
-            terminal.append(f"pass {op['n']} opened but neither recorded nor aborted")
-        elif r is None:
-            terminal.append("no recorded pass")
-        elif not r["understood"]:
-            terminal.append("reviewer did not demonstrate a credible understanding")
-        elif lp["fingerprint"] != state["fingerprint_current"]:
-            # Report-only never reaches blockers(), so without this an area rewritten or
-            # deleted after its pass closes `reviewed`, and `project close` then deletes the
-            # only state that could contradict the ledger row.
-            terminal.append("the area moved since the pass; the review describes code that is "
-                            "no longer there")
-        elif scope_is_empty(state["scope"], "project"):
-            terminal.append("the area's files are gone; the review describes nothing")
+        # The same conditions `blockers()` reads, phrased for an area. Report-only does not
+        # require the loop's own acceptance — nothing here is meant to be fixed — but a
+        # review with no pass, no understanding, or one describing code that has since moved
+        # is not a review in either mode, and keeping the list in one place is what stops the
+        # two from drifting apart again.
+        terminal = review_integrity(state, "area")
         fixable = []
         # Required whatever the finding count: closing deletes state.json, so this file is
         # the only surviving record of the review — for a clean area it is the *entire*

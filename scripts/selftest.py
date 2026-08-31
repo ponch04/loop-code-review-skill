@@ -842,6 +842,47 @@ def a_metric_the_reviewer_withheld_never_prints_as_none():
 
 
 @case
+def report_only_close_reads_the_same_conditions_as_the_acceptance_gate():
+    """Two hand-written lists of "what makes a review not a review" drift, always one-sided.
+
+    Report-only never calls `blockers()`, so it kept its own copy: the open-pass check
+    reached it long after acceptance had it, and `allow_empty` never did — an area queued
+    deliberately empty (`project init --allow-empty`, a directory not written yet) closed
+    `incomplete` no matter how carefully its report was written. The conditions now come
+    from one place; only the wording differs, because an area reviewer is told about the
+    area and a task loop about the scope.
+    """
+    d = repo({"keep/a.py": "x\n"})
+    run("project", "init", "--report-only", "--allow-empty", "--", "planned", cwd=d, check=True)
+    out = run("project", "next", cwd=d, check=True).stdout
+    stem = out.split("findings file: ")[1].splitlines()[0]
+    run("validate", "--none", "--reason", "the directory is not written yet", cwd=d, check=True)
+    run("pass-start", cwd=d, check=True)
+    run("pass-record", "--score", "9", "--findings", "0", "--understood",
+        "--test-evidence", "justified-absent", cwd=d, check=True)
+    _io.open(os.path.join(d, stem), "w").write("A. nothing here yet\n")
+    run("project", "close", cwd=d, check=True)
+    area = json.load(_io.open(os.path.join(d, ".loop-review", "project.json"),
+                              encoding="utf-8"))["areas"][0]
+    ok(area["status"] == "reviewed",
+       f"an area queued empty on purpose must close reviewed: {area['status']}, {area['blockers']}")
+
+    # And the exemption is opt-in: an area that lost its files still fails.
+    d = repo({"pkg/a.py": "x\n"})
+    run("project", "init", "--report-only", "--", "pkg", cwd=d, check=True)
+    out = run("project", "next", cwd=d, check=True).stdout
+    stem = out.split("findings file: ")[1].splitlines()[0]
+    pass_through(d, "9", "0", "trusted")
+    _io.open(os.path.join(d, stem), "w").write("A. clean\n")
+    sh("git rm -q -r pkg && git commit -qm drop", d)
+    run("project", "close", cwd=d, check=True)
+    area = json.load(_io.open(os.path.join(d, ".loop-review", "project.json"),
+                              encoding="utf-8"))["areas"][0]
+    ok(area["status"] == "incomplete" and any("files are gone" in b for b in area["blockers"]),
+       f"an area that vanished must still be incomplete: {area['status']}, {area['blockers']}")
+
+
+@case
 def report_only_close_refuses_to_read_an_open_pass_as_a_review():
     """Silence is not a verdict — in both modes.
 
