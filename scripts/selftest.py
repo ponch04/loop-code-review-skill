@@ -679,6 +679,35 @@ def a_command_that_never_ran_is_droppable_a_failure_is_not():
 
 
 @case
+def reset_clears_its_own_debris_and_says_so_only_about_a_stranger():
+    """What `reset` removes and what it calls "not ours" must come from one list.
+
+    They did not: `project.json.tmp` — crash debris from an interrupted ledger write —
+    survived a plain `reset`, and because the ownership test listed a different set, the very
+    next line announced that `.loop-review/` "holds files this script did not create" about
+    the file the script had just left there.
+    """
+    d = repo({"pkg/a.py": "x\n"})
+    sd = os.path.join(d, ".loop-review")
+    run("project", "init", "--", "pkg", cwd=d, check=True)
+    _io.open(os.path.join(sd, "project.json.tmp"), "w").write('{"partial"')
+    r = run("reset", cwd=d, check=True)
+    ok(not os.path.exists(os.path.join(sd, "project.json.tmp")),
+       "a plain reset must clear the ledger's own .tmp debris")
+    ok("did not create" not in r.stdout + r.stderr,
+       f"and must not disown its own file: {(r.stdout + r.stderr).strip()[:200]}")
+    ok(os.path.exists(os.path.join(sd, "project.json")),
+       "while the ledger itself survives a reset without --project")
+
+    _io.open(os.path.join(sd, "notes.txt"), "w").write("operator notes\n")
+    r = run("reset", "--project", cwd=d, check=True)
+    ok(os.path.exists(os.path.join(sd, "notes.txt")),
+       "a file the operator put there must never be deleted")
+    ok("did not create" in r.stdout + r.stderr,
+       f"and that is what the note is for: {(r.stdout + r.stderr).strip()[:200]}")
+
+
+@case
 def every_command_that_echoes_the_loop_context_shows_both_fields():
     """The brief and the scope note are the only things that cross into the reviewer's prompt.
 
