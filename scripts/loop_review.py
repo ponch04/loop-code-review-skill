@@ -494,6 +494,17 @@ def red_provenance(state, cmd):
     return "inherited"
 
 
+def metric(value, absent="not given"):
+    """Render an optional metric, never as the literal `None`.
+
+    `--score` and `--test-score` are optional by design — the agent must not invent a value
+    the reviewer withheld — so every line that shows one has to say so in words. `pass-record`
+    spelled that out for itself while `accept` and `status` printed `None`, which reads as a
+    value and, worse, as a defect in the record rather than a verdict the reviewer never gave.
+    """
+    return absent if value is None else value
+
+
 def print_validation(cur, header="validation on current state", state=None):
     """One rendering of validation state for every text-mode command.
 
@@ -1104,9 +1115,9 @@ def cmd_pass_record(a):
         "recorded": now(),
     }
     save(state)
-    print(f"pass {lp['n']} recorded: score {a.score if a.score is not None else 'not given'}, "
+    print(f"pass {lp['n']} recorded: score {metric(a.score)}, "
           f"{a.findings} finding(s), understood={bool(a.understood)}, "
-          f"test evidence {a.test_evidence or 'not assessed'}")
+          f"test evidence {metric(a.test_evidence, 'not assessed')}")
     if a.findings == 0 and a.score is not None and a.score < 9.5:
         print("note: score below 9.5 with zero findings — treat the number as calibration noise; findings control the loop")
 
@@ -1146,7 +1157,8 @@ def cmd_amend(a):
     state["fingerprint_current"] = fp_of(state)
     save(state)
     print(f"pass {lp['n']} amended: " + ", ".join(f"{k}={v}" for k, v in given.items()))
-    print(f"pass {lp['n']}: score {r['score']}, {r['resolved']}/{r['findings']} resolved, understood={r['understood']}, test evidence {r.get('test_evidence')}")
+    print(f"pass {lp['n']}: score {metric(r['score'])}, {r['resolved']}/{r['findings']} resolved, "
+          f"understood={r['understood']}, test evidence {metric(r.get('test_evidence'), 'not assessed')}")
     if state["fingerprint_current"] != lp["fingerprint"]:
         print("note: scoped changes moved since this pass — the review is stale; validate and open a new pass")
 
@@ -1209,7 +1221,8 @@ def cmd_accept(a):
         if lp and len(state["passes"]) >= state["max_passes"]:
             print(f"pass limit reached ({state['max_passes']}) — report as INCOMPLETE")
         sys.exit(1)
-    print(f"ACCEPTED after {len(state['passes'])} pass(es); last score {lp['result']['score']} (progress signal only)")
+    print(f"ACCEPTED after {len(state['passes'])} pass(es); "
+          f"last score {metric(lp['result']['score'])} (progress signal only)")
 
 
 def cmd_status(a):
@@ -1228,7 +1241,9 @@ def cmd_status(a):
     for p in state["passes"]:
         r = p.get("result")
         if r:
-            print(f"  #{p['n']}  score {r['score']}  findings {r['resolved']}/{r['findings']} resolved  understood={r['understood']}  test-evidence={r.get('test_evidence')}  test-score={r.get('test_score')}")
+            print(f"  #{p['n']}  score {metric(r['score'])}  findings {r['resolved']}/{r['findings']} resolved"
+                  f"  understood={r['understood']}  test-evidence={metric(r.get('test_evidence'), 'not assessed')}"
+                  f"  test-score={metric(r.get('test_score'))}")
         elif p.get("aborted"):
             print(f"  #{p['n']}  (aborted: {p.get('abort_reason', 'unspecified')})")
         else:
@@ -1691,7 +1706,7 @@ def cmd_project_status(a):
             line += f"  passes {x['passes']}"
         if x.get("findings") is not None:
             resolved = x.get("resolved")
-            line += f"  findings {'?' if resolved is None else resolved}/{x['findings']}"
+            line += f"  findings {metric(resolved, '?')}/{x['findings']}"
         if x.get("score") is not None:
             line += f"  score {x['score']}"
         if x.get("blockers"):
