@@ -986,6 +986,35 @@ def replacing_a_no_check_declaration_with_real_checks_is_not_shrinkage():
 
 
 @case
+def none_and_a_command_are_refused_together_by_both_validate_commands():
+    """`--none` is about the declaration, a command after `--` is about a run: exactly one.
+
+    `validate-drop` refused the pair; `validate` accepted it and dropped the command,
+    recording "no executable check applies" for a surface that has a test suite — and that
+    sentence is transcribed into the reviewer's prompt. A rejected typo costs a retry; this
+    one told the reviewer there was nothing to run. Both refusals are asserted by their
+    blocker: each command has several, and any of them would satisfy a code-only check.
+    """
+    d = repo({"src/a.py": "1\n"})
+    write(d, "src/a.py", "2\n")
+    run("init", "--", "src", cwd=d, check=True)
+    for cmd in ("validate", "validate-drop"):
+        r = run(cmd, "--none", "--reason", "no checks", "--", "echo", "real", cwd=d)
+        ok(r.returncode != 0 and "not both" in r.stderr,
+           f"`{cmd} --none -- <command>` must be refused: rc={r.returncode} {r.stderr.strip()[:160]}")
+        r = run(cmd, cwd=d)
+        ok(r.returncode != 0 and "--none" in r.stderr,
+           f"`{cmd}` with neither must name both ways in: {r.stderr.strip()[:160]}")
+    st = json.load(_io.open(os.path.join(d, ".loop-review", "state.json"), encoding="utf-8"))
+    ok(not st["validation"], f"nothing may have been recorded by a refused call: {st['validation']}")
+
+    run("validate", "--", "echo real", cwd=d, check=True)
+    run("validate", "--none", "--reason", "docs only", cwd=d, check=True)
+    ok(run("validate-drop", "--none", cwd=d).returncode == 0,
+       "and each form on its own must still work")
+
+
+@case
 def a_mistaken_no_check_declaration_can_be_withdrawn_by_name():
     """`validate --none` writes a record under an internal marker, so retracting it needed one.
 
