@@ -1559,8 +1559,17 @@ def cmd_project_status(a):
         line = f"  [{x['status']:<11}] {area_name(x)}"
         if x.get("test_evidence"):
             line += f"  test-evidence {x['test_evidence']}"
+        # Each metric prints only if the area has one. They are not filled as a block: an
+        # area closed before any pass — an empty or renamed one, settled `incomplete` by
+        # `project next` — has `passes: 0` and nothing else, and printing the group on the
+        # strength of the pass count alone rendered it as `findings None/None score None`.
         if x.get("passes") is not None:
-            line += f"  passes {x['passes']}  findings {x.get('resolved')}/{x.get('findings')}  score {x.get('score')}"
+            line += f"  passes {x['passes']}"
+        if x.get("findings") is not None:
+            resolved = x.get("resolved")
+            line += f"  findings {'?' if resolved is None else resolved}/{x['findings']}"
+        if x.get("score") is not None:
+            line += f"  score {x['score']}"
         if x.get("blockers"):
             line += "  — " + "; ".join(x["blockers"])
         print(line)
