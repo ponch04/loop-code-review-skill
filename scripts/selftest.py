@@ -480,7 +480,14 @@ def the_documented_task_workflow_runs_as_written():
     ok("task brief" in out, "pass-start must echo the brief the reviewer is to be given")
     run("pass-record", "--score", "8.5", "--findings", "2", "--understood",
         "--test-evidence", "trusted", "--test-score", "7", cwd=d, check=True)
+    write(d, "src/a.py", "v1\nv2 fixed\n")               # the fix batch, then step 5
     run("resolve", "--fixed", "1", "--withdrawn", "1", cwd=d, check=True)
+    ok(run("accept", cwd=d).returncode != 0,
+       "a fix batch makes the review stale — acceptance waits for the pass that saw it")
+    run("validate", "--", "true", cwd=d)
+    run("pass-start", cwd=d, check=True)
+    run("pass-record", "--score", "9.5", "--findings", "0", "--understood",
+        "--test-evidence", "trusted", cwd=d, check=True)
     ok(run("accept", cwd=d).returncode == 0, "the documented task flow must reach acceptance")
     ok(run("status", "--json", cwd=d, check=True).stdout.strip().startswith("{"),
        "status --json must be machine-readable for the final report")
@@ -699,7 +706,10 @@ def unresolved_findings_block_acceptance():
     run("pass-record", "--score", "9", "--findings", "2", "--understood",
         "--test-evidence", "trusted", cwd=d, check=True)
     ok(run("accept", cwd=d).returncode != 0, "unresolved findings must block accept")
-    run("resolve", "--fixed", "2", cwd=d, check=True)
+    # Withdrawal and adjudication settle a finding without touching the code, so they are
+    # what can unblock acceptance on this very state; `--fixed` cannot, and must not — see
+    # a_recorded_fix_must_be_on_disk_before_acceptance.
+    run("resolve", "--withdrawn", "1", "--adjudicated-invalid", "1", cwd=d, check=True)
     ok(run("accept", cwd=d).returncode == 0, "resolving them must unblock accept")
 
 
@@ -1210,6 +1220,37 @@ def an_unusable_recorded_review_is_not_what_the_workflow_asks_for():
 
 
 @case
+def a_recorded_fix_must_be_on_disk_before_acceptance():
+    """A fix changes code, so it moves the fingerprint. One that did not is not on disk.
+
+    The check excused a `--fixed` whose own log entry sat on the reviewed fingerprint, on the
+    theory that only a revert could put the scope back there. Typing `resolve --fixed` before
+    editing anything reaches the same state deliberately: the finding counts as resolved, the
+    review is not stale because nothing moved, validation is still green — and `accept`
+    signed off the exact code the reviewer had called defective.
+    """
+    d = repo({"src/a.py": "good\n"})
+    write(d, "src/a.py", "DEFECT\n")
+    run("init", "--", "src", cwd=d, check=True)
+    pass_through(d, "5", "1", "trusted")
+    run("resolve", "--fixed", "1", cwd=d, check=True)      # claimed before any edit
+    r = run("accept", cwd=d)
+    ok(r.returncode != 0 and "defective" in r.stdout,
+       f"acceptance must refuse while the reviewed state is still on disk: {r.stdout.strip()[:200]}")
+    ok(_io.open(os.path.join(d, "src/a.py")).read() == "DEFECT\n", "fixture: nothing was fixed")
+
+    write(d, "src/a.py", "good again\n")                   # now actually fix it
+    r = run("accept", cwd=d)
+    ok(r.returncode != 0 and "stale" in r.stdout,
+       f"and the fix must be reviewed, not waved through: {r.stdout.strip()[:200]}")
+    run("validate", "--", "true", cwd=d)
+    run("pass-start", cwd=d, check=True)
+    run("pass-record", "--score", "9.5", "--findings", "0", "--understood",
+        "--test-evidence", "trusted", cwd=d, check=True)
+    ok(run("accept", cwd=d).returncode == 0, "the honest route must still end in acceptance")
+
+
+@case
 def a_fix_outside_the_scope_can_be_brought_under_the_gates():
     """A fix landing next door moves no fingerprint, so no gate sees it until the scope is
     widened — and widening must keep the pass history."""
@@ -1220,8 +1261,9 @@ def a_fix_outside_the_scope_can_be_brought_under_the_gates():
     write(d, "src/helper.ts", "b2\n")                  # the fix lands outside the scope
     run("resolve", "--fixed", "1", cwd=d, check=True)
     before = run("fingerprint", cwd=d, check=True).stdout.strip()
-    ok(run("accept", cwd=d).returncode == 0,
-       "precondition: an out-of-scope fix is invisible until the scope is widened")
+    r = run("accept", cwd=d)
+    ok(r.returncode != 0 and "scope" in r.stdout,
+       f"a fix the scope cannot see must block acceptance and point at widening: {r.stdout.strip()[:200]}")
     run("scope", "--", "src/helper.ts", cwd=d, check=True)
     after = run("fingerprint", cwd=d, check=True).stdout.strip()
     ok(after != before, "widening the scope must move the reviewed state")

@@ -120,9 +120,12 @@ and judged against `expected_output`. There is no CI.
   (`no-changes`); a path git cannot see is warned about, because it contributes nothing to the
   fingerprint.
 - **Scope widens, never narrows, and only through `scope --`.** A fix landing outside the
-  recorded scope is invisible to every gate; widening moves the fingerprint and keeps the pass
-  history, which `init --force` would destroy. Narrowing retires evidence and stays a human
-  decision.
+  recorded scope changes nothing the fingerprint covers; widening moves the fingerprint and
+  keeps the pass history, which `init --force` would destroy. Narrowing retires evidence and
+  stays a human decision. A recorded `--fixed` that left the fingerprint on the reviewed state
+  blocks acceptance either way: the script cannot tell "fixed next door" from "not fixed at
+  all" — the honest answers are `scope --` or making the change — and it must not guess,
+  because guessing once let `resolve --fixed` typed before any edit accept the defect itself.
 - **"No executable check applies" is a recordable answer** (`validate --none --reason`), not a
   green `true` — which satisfies condition 1 vacuously *and* reaches the reviewer as a check
   the author claims to have run.

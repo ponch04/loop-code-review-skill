@@ -526,12 +526,16 @@ def blockers(state):
     elif lp["result"]["resolved"]:
         # Fixes were recorded on some state; if the scope is back on the fingerprint the
         # review found defective, they are not on disk any more.
-        fixed_on = {x.get("fingerprint") for x in lp["result"].get("resolution_log", [])
-                    if x.get("fixed")}
-        if fixed_on and state["fingerprint_current"] == lp["fingerprint"] \
-                and lp["fingerprint"] not in fixed_on:
-            reasons.append("the scope is back on the state the review found defective — the "
-                           "recorded fixes are not present (reverted, stashed or checked out)")
+        fixed = any(x.get("fixed") for x in lp["result"].get("resolution_log", []))
+        # Standing on the reviewed fingerprint *is* the proof that the fixes are absent —
+        # a fix changes the code, so it moves the hash. Excusing the case where the fix was
+        # recorded on that same fingerprint excused the only way to reach it deliberately:
+        # `resolve --fixed` typed before touching a file left the log pointing at the
+        # reviewed state, the exemption fired, and `accept` signed off the defect itself.
+        if fixed and state["fingerprint_current"] == lp["fingerprint"]:
+            reasons.append("the scope is on the state the review found defective — the "
+                           "recorded fixes are not present (never made, reverted, stashed, "
+                           "checked out, or landed outside the scope: widen it with `scope --`)")
     if not lp["result"]["understood"]:
         reasons.append("reviewer did not demonstrate a credible understanding of the change")
     evidence = lp["result"].get("test_evidence")
@@ -1109,6 +1113,15 @@ def cmd_resolve(a):
               "if the reviewer named more findings than were recorded, `amend --findings` first")
     if state["fingerprint_current"] != lp["fingerprint"]:
         print("scoped changes moved: validate, then open a new pass with a fresh reviewer")
+    elif a.fixed:
+        # Say it here, while the operator is still in the fix batch, rather than letting
+        # them discover at `accept` that nothing they recorded is on disk. A fix changes
+        # code, so it moves the fingerprint; one that did not is either still unwritten or
+        # landed outside the recorded scope, where no gate can see it.
+        print("note: a fix was recorded but the scope has not moved — the change is not on "
+              "disk yet, or it landed outside the scope (`scope --` widens it). `accept` "
+              "will refuse while the code is the state the review called defective",
+              file=sys.stderr)
 
 
 def cmd_accept(a):
