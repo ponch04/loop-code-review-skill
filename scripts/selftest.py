@@ -679,6 +679,30 @@ def a_command_that_never_ran_is_droppable_a_failure_is_not():
 
 
 @case
+def every_command_that_echoes_the_loop_context_shows_both_fields():
+    """The brief and the scope note are the only things that cross into the reviewer's prompt.
+
+    Four commands echo them and each printed the pair by hand; `init` — the command that
+    records them — printed the brief and dropped the note. The note was in `state.json`, so
+    nothing looked broken, but the agent fills the prompt from this output: a `--scope-note`
+    given at `init` reached no reviewer until some later command happened to show it.
+    """
+    d = repo({"src/a.py": "1\n"})
+    write(d, "src/a.py", "2\n")
+    note, brief = "only the parser hunks", "a.py must end with v2"
+    out = run("init", "--task-brief", brief, "--scope-note", note, "--", "src",
+              cwd=d, check=True).stdout
+    ok(brief in out and note in out, f"init must confirm both fields it recorded: {out}")
+
+    run("validate", "--", "true", cwd=d)
+    for cmd in (("status",), ("pass-start",)):
+        out = run(*cmd, cwd=d, check=True).stdout
+        ok(brief in out and note in out, f"{cmd[0]} must echo both: {out[:200]}")
+    out = run("brief", "--force", "--scope-note", "narrowed to the parser", cwd=d, check=True).stdout
+    ok(brief in out and "narrowed to the parser" in out, f"brief must echo both: {out[:200]}")
+
+
+@case
 def validate_drop_describes_the_state_it_refuses_in():
     """The refusal is read by whoever must decide; it has to be true about the state.
 
