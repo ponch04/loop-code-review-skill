@@ -197,6 +197,43 @@ def an_area_emptied_after_queueing_is_refused_at_open():
 
 
 @case
+def an_areas_row_is_closed_only_from_the_loop_that_area_opened():
+    """Identity is the area the loop was opened for, not the paths it happens to cover.
+
+    Containment cannot answer this. `scope --` legitimately widens a loop past its queued
+    paths — that is why the ledger records `reviewed_paths` — so "the loop covers this area"
+    also matched a *different* area's loop that merely contained them: a review of `pkg/a +
+    pkg/b` was signed into the row of `pkg/a` alone, `reviewed`, with no `--force` asked for.
+    """
+    d = repo({"pkg/a/f.py": "x\n", "pkg/b/g.py": "y\n"})
+    run("project", "init", "--report-only", "--", "pkg/a", "pkg/b", cwd=d, check=True)
+    stem = run("project", "next", cwd=d, check=True).stdout.split("findings file: ")[1].splitlines()[0]
+    sf = os.path.join(d, ".loop-review", "state.json")
+    st = json.load(_io.open(sf, encoding="utf-8"))
+    st["area"] = ["pkg/a", "pkg/b"]                    # a loop opened for a different area
+    st["scope"] = ["pkg/a", "pkg/b"]
+    json.dump(st, _io.open(sf, "w", encoding="utf-8"), indent=2)
+    pass_through(d, "9.5", "0", "trusted")
+    _io.open(os.path.join(d, stem), "w").write("A. no actionable findings\n")
+    r = run("project", "close", cwd=d)
+    ok(r.returncode != 0 and "not area" in r.stderr,
+       f"a wider loop from elsewhere must not close this row: rc={r.returncode} {r.stderr.strip()[:160]}")
+
+    # The other side, which is why containment was there in the first place.
+    d = repo({"pkg/a/f.py": "x\n", "pkg/b/g.py": "y\n"})
+    run("project", "init", "--report-only", "--", "pkg/a", "pkg/b", cwd=d, check=True)
+    stem = run("project", "next", cwd=d, check=True).stdout.split("findings file: ")[1].splitlines()[0]
+    run("scope", "--", "pkg/b", cwd=d, check=True)     # this area's own loop, widened
+    pass_through(d, "9.5", "0", "trusted")
+    _io.open(os.path.join(d, stem), "w").write("A. no actionable findings\n")
+    run("project", "close", cwd=d, check=True)
+    area = json.load(_io.open(os.path.join(d, ".loop-review", "project.json"),
+                              encoding="utf-8"))["areas"][0]
+    ok(area["status"] == "reviewed" and area.get("reviewed_paths") == ["pkg/a", "pkg/b"],
+       f"a widened loop is still this area's: {area['status']}, {area.get('reviewed_paths')}")
+
+
+@case
 def a_foreign_loop_never_traps_the_area_that_did_not_open_it():
     """`project close` and `reset` must not each defer to the other.
 
@@ -211,7 +248,9 @@ def a_foreign_loop_never_traps_the_area_that_did_not_open_it():
     run("project", "next", cwd=d, check=True)
     sf = os.path.join(d, ".loop-review", "state.json")
     st = json.load(open(sf))
-    st["scope"] = ["b"]                                # the open loop is not this area's
+    # A loop opened for another area. `area` is the identity — forging `scope` alone would
+    # only look like this area's own loop after a legitimate `scope --` widening.
+    st["area"] = st["scope"] = ["b"]
     json.dump(st, open(sf, "w"), indent=2)
 
     r = run("project", "close", cwd=d)
@@ -431,7 +470,7 @@ def every_closed_ledger_row_has_the_same_shape():
     run("project", "next", cwd=d, check=True)                       # 4. a foreign loop
     sf = os.path.join(d, ".loop-review", "state.json")
     st = json.load(_io.open(sf, encoding="utf-8"))
-    st["scope"] = ["ok"]
+    st["area"] = st["scope"] = ["ok"]                  # a loop belonging to another area
     json.dump(st, _io.open(sf, "w", encoding="utf-8"), indent=2)
     run("project", "close", "--force", cwd=d, check=True)
 
@@ -1478,7 +1517,7 @@ def stuck_states():
     run("project", "next", cwd=d, check=True)
     sf = os.path.join(d, ".loop-review", "state.json")
     st = json.load(_io.open(sf, encoding="utf-8"))
-    st["scope"] = ["b"]
+    st["area"] = st["scope"] = ["b"]                   # a loop belonging to another area
     json.dump(st, _io.open(sf, "w", encoding="utf-8"), indent=2)
     out.append(("project close, foreign loop", d, ("project", "close"),
                 run("project", "close", cwd=d).stderr))
