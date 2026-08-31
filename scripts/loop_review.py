@@ -597,7 +597,8 @@ def cmd_init(a):
     if (a.task_brief or a.task_brief_file) and a.mode == "project":
         # An inherited area has no task and therefore no acceptance criteria to miss;
         # a brief here would only be the operator's opinion smuggled past isolation.
-        die("--task-brief applies to --mode changes only")
+        named = [f for f in brief_flags_given(a) if f != "--scope-note"]
+        die(" and ".join(named) + " applies to --mode changes only")
     if a.scope_note and a.mode == "project":
         # A scope note says which hunks of a scoped file are task-owned. An area has no
         # task-owned hunks: everything under its paths is in scope, which is what project
@@ -658,6 +659,19 @@ def cmd_init(a):
     for p in scope:
         print(f"  - {p}")
     print_task_brief(state)
+
+
+def brief_flags_given(a):
+    """The brief/scope-note flags the operator actually typed, in the order they are documented.
+
+    A refusal must name what was passed. `--task-brief-file` was folded into `--task-brief`
+    at both refusal sites, so someone who supplied a file was told about a flag they never
+    used and could not tell whether their own was allowed. Two call sites asked the same
+    question, so they ask it once here.
+    """
+    return [flag for flag, used in (("--task-brief", a.task_brief),
+                                    ("--task-brief-file", getattr(a, "task_brief_file", None)),
+                                    ("--scope-note", getattr(a, "scope_note", None))) if used]
 
 
 def read_task_brief(a):
@@ -977,11 +991,10 @@ def cmd_brief(a):
         # Say which flag is being refused, not one the operator may never have typed: both
         # are changes-mode only, for two different reasons, and a message about `--task-brief`
         # left someone who passed `--scope-note` unable to tell whether it was allowed.
-        given = [flag for flag, used in (("--task-brief", a.task_brief or a.task_brief_file),
-                                         ("--scope-note", a.scope_note)) if used]
+        given = brief_flags_given(a)
         die(" and ".join(given or ["brief"]) + ": an inherited area has no task and no "
             "acceptance criteria, and no task-owned hunks — every file under it is in "
-            "scope. Both are changes-mode only.")
+            "scope. They are changes-mode only.")
     brief = read_task_brief(a)
     note = (a.scope_note or "").strip() or None
     if not brief and not note:
