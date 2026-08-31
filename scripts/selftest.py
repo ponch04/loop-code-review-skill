@@ -363,6 +363,35 @@ def a_red_check_is_labelled_inherited_or_regressed():
 
 
 @case
+def the_ledger_never_prints_a_metric_the_area_does_not_have():
+    """`project status` is the deliverable of a project review — it has to read as a report.
+
+    The metrics were printed as one block, gated on the pass count alone, so an area settled
+    before it ever opened a pass — an empty or renamed one, which `project next` closes with
+    `passes: 0` — rendered as `passes 0  findings None/None  score None`, three fields that do
+    not exist dressed as results.
+    """
+    d = repo({"a/x.py": "1\n", "gone/y.py": "2\n"})
+    run("project", "init", "--report-only", "--", "a", "gone", cwd=d, check=True)
+    out = run("project", "next", cwd=d, check=True).stdout
+    stem = out.split("findings file: ")[1].splitlines()[0]
+    pass_through(d, "9.5", "0", "trusted")
+    _io.open(os.path.join(d, stem), "w").write("A. no actionable findings\n")
+    run("project", "close", cwd=d, check=True)
+    sh("git rm -q -r gone && git commit -qm drop", d)
+    run("project", "next", cwd=d)                          # settles `gone` incomplete
+    out = run("project", "status", cwd=d, check=True).stdout
+    ok("None" not in out, f"no metric may print as None: {out}")
+    gone = next(l for l in out.splitlines() if "gone" in l)
+    ok("findings" not in gone and "score" not in gone,
+       f"an area with no review must not show findings or a score: {gone}")
+    rows = [l for l in out.splitlines() if l.startswith("  [")]
+    reviewed = next(l for l in rows if l.split("]", 1)[1].strip().startswith("a"))
+    ok("passes 1" in reviewed and "findings 0/0" in reviewed and "score 9.5" in reviewed,
+       f"and a reviewed area must still show all of them: {reviewed}")
+
+
+@case
 def project_mode_refuses_a_brief_and_a_scope_note_by_name():
     """Both are changes-mode only, and both commands must say so about the flag given.
 
