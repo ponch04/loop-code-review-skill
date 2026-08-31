@@ -1276,7 +1276,13 @@ def area_slug(x):
     file could not be written at all, so an over-long stem is truncated with a hash tail.
     """
     paths = area_paths(x)
-    stem = "__".join(p.strip("/").replace("/", "__") for p in paths) or "root"
+    stem = "__".join(p.strip("/").replace("/", "__") for p in paths)
+    # A leading dot would make the findings file hidden, and in report-only that file is the
+    # entire surviving deliverable — `project close` deletes the loop state, so a report
+    # nobody lists is a report nobody has. The repository root arrives as `.`, and any area
+    # named `.github`, `.config` and so on has the same effect. Identity is unaffected: the
+    # hash tail below is unconditional, so `.github` and `github` still differ.
+    stem = stem.lstrip(".") or "root"
     # The hash is unconditional, not a length fallback: `["src", "lib"]` and `["src/lib"]`
     # both flatten to `src__lib`, so one area's findings file silently overwrote the other's
     # — and in report-only that file is the entire deliverable, written after `project close`
