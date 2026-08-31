@@ -912,6 +912,49 @@ def every_command_that_echoes_the_loop_context_shows_both_fields():
 
 
 @case
+def replacing_a_no_check_declaration_with_real_checks_is_not_shrinkage():
+    """A declaration is not a run, so it never joins the set a later pass must carry.
+
+    `validate --none` answers exit condition 1 honestly, but nothing was executed. Counted as
+    evidence, it inverted the rule that caught it: an area that gained real tests between
+    passes had its evidence *grow*, and `pass-start` refused that as shrinkage — demanding
+    the declaration be re-run, or retired with a `--force` the agent is not allowed to use.
+    Both exits were closed at once, which is what made it a dead end rather than a nuisance.
+    """
+    d = repo({"docs/a.md": "1\n"})
+    write(d, "docs/a.md", "2\n")
+    run("init", "--", "docs", cwd=d, check=True)
+    run("validate", "--none", "--reason", "documentation only", cwd=d, check=True)
+    run("pass-start", cwd=d, check=True)
+    run("pass-record", "--score", "8", "--findings", "1", "--understood",
+        "--test-evidence", "justified-absent", cwd=d, check=True)
+    write(d, "docs/a.md", "3\n")
+    run("resolve", "--fixed", "1", cwd=d, check=True)
+    run("validate", "--", "echo real tests", cwd=d)     # the area gained a real check
+    r = run("pass-start", cwd=d)
+    ok(r.returncode == 0,
+       f"real checks replacing a declaration must not read as shrinkage: {r.stderr.strip()[:200]}")
+
+    # The gate itself is untouched: a real check the pass rested on is still demanded.
+    d = repo({"src/a.py": "1\n"})
+    write(d, "src/a.py", "2\n")
+    run("init", "--", "src", cwd=d, check=True)
+    run("validate", "--", "echo suite", cwd=d)
+    run("validate", "--none", "--reason", "no linter here", cwd=d, check=True)
+    run("pass-start", cwd=d, check=True)
+    run("pass-record", "--score", "8", "--findings", "1", "--understood",
+        "--test-evidence", "trusted", cwd=d, check=True)
+    write(d, "src/a.py", "3\n")
+    run("resolve", "--fixed", "1", cwd=d, check=True)
+    run("validate", "--", "echo lint", cwd=d)
+    r = run("pass-start", cwd=d)
+    ok(r.returncode != 0 and "echo suite" in r.stderr,
+       f"a real check the pass rested on must still be demanded: {r.stderr.strip()[:200]}")
+    ok("no executable check applies" not in r.stderr,
+       f"and the declaration must not be demanded alongside it: {r.stderr.strip()[:200]}")
+
+
+@case
 def a_mistaken_no_check_declaration_can_be_withdrawn_by_name():
     """`validate --none` writes a record under an internal marker, so retracting it needed one.
 
