@@ -1578,6 +1578,37 @@ def multi_path_areas_are_one_area_with_a_bounded_slug():
 
 
 @case
+def a_mistyped_path_inside_a_glued_area_is_reported():
+    """Emptiness is asked of the area; a path inside one can still be invisible.
+
+    `scope_is_empty` answers for the area as a whole, so in `pkg + non_exitent` the healthy
+    neighbour covered the typo: the area queued, opened, and reached the reviewer naming a
+    path it was told to read whole and cannot find. Task mode has warned about this since
+    `init`; project mode had no `warn_unseen` at all, at either moment it could speak.
+    """
+    d = repo({"pkg/a.py": "x\n"})
+    r = run("project", "init", "--report-only", "--", "pkg", "+", "non_exitent", cwd=d, check=True)
+    ok("non_exitent" in r.stderr and "does not exist" in r.stderr,
+       f"the queue must report the path git cannot see: {r.stderr.strip()[:200]}")
+    r = run("project", "next", cwd=d, check=True)
+    ok("non_exitent" in r.stderr,
+       f"and so must the area's own opening, where the prompt is filled: {r.stderr.strip()[:200]}")
+
+    # A path can also vanish between queueing and opening — that is the second moment.
+    d = repo({"a/f.py": "x\n", "b/f.py": "y\n", "c/f.py": "z\n"})
+    run("project", "init", "--report-only", "--", "a", "b", "+", "c", cwd=d, check=True)
+    sh("git rm -q -r c && git commit -qm drop", d)
+    r = run("project", "next", cwd=d, check=True)
+    ok("`c`" not in r.stderr, f"the first area must not be warned about someone else's path: {r.stderr[:200]}")
+    pass_through(d, "9", "0", "trusted")
+    findings(d, "a")
+    run("project", "close", cwd=d, check=True)
+    r = run("project", "next", cwd=d, check=True)
+    ok("`c`" in r.stderr and "does not exist" in r.stderr,
+       f"a path deleted after queueing must be reported when its area opens: {r.stderr.strip()[:200]}")
+
+
+@case
 def a_glue_operator_missing_a_path_is_refused_wherever_it_sits():
     """`+` joins the path on its left to the one on its right — every position where one of
     those is missing is the same fault, and each was found separately.
