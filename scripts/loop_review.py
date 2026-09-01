@@ -1585,6 +1585,11 @@ def cmd_project_init(a):
     # path matches no file, and an area nobody can read still passes every gate and closes
     # as `accepted`. Checking at queue time reports all the bad paths at once, while the
     # operator is still choosing them, instead of one per `project next`.
+    # Per path, not per area: `scope_is_empty` asks whether the area as a whole has files, so
+    # a glued area kept a mistyped path alive behind a healthy neighbour — `pkg + non_exitent`
+    # queued, opened and reached the reviewer as one of the paths it was told to read whole.
+    # Task mode has warned about this since `init`; project mode never did.
+    warn_unseen([q for x in areas for q in x])
     empty = [x for x in areas if scope_is_empty(x, "project")]
     if empty and not a.allow_empty:
         die("these area(s) match no file — fix the paths (--allow-empty to queue them anyway):\n"
@@ -1658,6 +1663,10 @@ def cmd_project_next(a):
     }
     state["fingerprint_current"] = fp_of(state)
     save(state)
+    # Again here, and not only at queue time: areas are queued once and opened one by one,
+    # so a path can be renamed or deleted in between — and this is the moment the agent
+    # writes the area's paths into the reviewer's prompt.
+    warn_unseen(area_paths(nxt))
     # SKILL.md tells the agent to write the reviewer's findings here; the directory has to
     # exist for that to be possible with a plain shell redirect.
     os.makedirs(FINDINGS_DIR, exist_ok=True)
