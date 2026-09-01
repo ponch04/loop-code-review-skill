@@ -2005,6 +2005,69 @@ def a_recommended_recovery_works_in_the_state_that_printed_it():
            f"{(r.stderr or r.stdout).strip()[:200]}")
 
 
+def docstring_signatures():
+    """The module docstring's `Commands:` block, as `{command: its whole entry}`.
+
+    An entry starts at a line naming a command and runs until the next one, so a signature
+    wrapped across lines is read whole rather than truncated at the first.
+    """
+    doc = read_text(LOOP).split('"""')[1].split("Commands:")[1]
+    entries, cur = {}, None
+    for raw in doc.splitlines():
+        name = next((c for c in sorted(SUBCOMMANDS, key=len, reverse=True)
+                     if raw.startswith("  " + c) and not raw.startswith("   ")), None)
+        if name:
+            cur = name
+            entries[cur] = entries.get(cur, "") + raw
+        elif cur:
+            entries[cur] += " " + raw.strip()
+    return entries
+
+
+@case
+def the_builtin_help_lists_every_flag_the_parser_accepts():
+    """`--help` is the CLI's own description of itself, and it drifted from the parser.
+
+    `--force` exists on `init`, `pass-start`, `project init` and `project close`, and the
+    docstring showed it on none of them — while showing it on `validate-drop`, so the block
+    read as deliberate. A flag the help omits is a capability the agent cannot know it has,
+    and `--force` is the audit surface AGENTS.md insists on keeping complete.
+    """
+    entries = docstring_signatures()
+    parser = module().build_parser()
+
+    def declared(p, prefix=""):
+        out = {}
+        for act in p._actions:
+            if act.__class__.__name__ == "_SubParsersAction":
+                for name, sub in act.choices.items():
+                    out.update(declared(sub, (prefix + " " + name).strip()))
+            else:
+                opts = {o for o in act.option_strings if o not in ("-h", "--help")}
+                if opts:                      # `-h` alone is not a documented flag
+                    out.setdefault(prefix, set()).update(opts)
+        return out
+
+    missing = []
+    for cmd, flags in sorted(declared(parser).items()):
+        entry = entries.get(cmd)
+        if entry is None:
+            missing.append(f"{cmd}: not described at all")
+            continue
+        for flag in sorted(flags):
+            if flag not in entry:
+                missing.append(f"{cmd}: {flag}")
+    ok(not missing, "flags the parser accepts and the help omits: " + "; ".join(missing))
+
+    # The passport's escape-hatch list is the same claim in prose; keep it honest too.
+    passport = read_text(os.path.join(ROOT, "AGENTS.md"))
+    hatches = passport.split("Escape hatches stay explicit")[1].split("- **")[0]
+    for cmd, flags in declared(parser).items():
+        if "--force" in flags:
+            ok(f"`{cmd}`" in hatches,
+               f"AGENTS.md lists the --force surface; `{cmd}` is missing from it")
+
+
 @case
 def every_command_the_script_recommends_exists_in_the_cli():
     """A refusal that names the way out is only useful if that way exists.
