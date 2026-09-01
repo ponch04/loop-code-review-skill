@@ -1042,6 +1042,31 @@ def replacing_a_no_check_declaration_with_real_checks_is_not_shrinkage():
 
 
 @case
+def a_lone_declaration_is_never_summarised_as_green():
+    """The header asked "are all exits zero?", and a declaration carries exit 0.
+
+    So a loop whose entire validation was `validate --none` printed `1 command(s), GREEN` —
+    the reading AGENTS.md forbids, on the line an agent transcribes into the reviewer's
+    prompt. The per-record rendering was corrected for exactly this once; the header kept
+    its own copy of the question, which is why the answer had to move into one helper.
+    """
+    d = repo({"docs/a.md": "1\n"})
+    write(d, "docs/a.md", "2\n")
+    run("init", "--", "docs", cwd=d, check=True)
+    run("validate", "--none", "--reason", "prose only", cwd=d, check=True)
+    out = run("status", cwd=d, check=True).stdout
+    ok("GREEN" not in out, f"a declaration alone must not summarise as GREEN: {out[:200]}")
+    ok("NOTHING RAN" in out, f"and must say that nothing ran: {out[:200]}")
+
+    run("validate", "--", "echo lint", cwd=d)          # a real check joins it
+    out = run("status", cwd=d, check=True).stdout
+    ok("GREEN" in out, f"a real green check must still read GREEN: {out[:200]}")
+    run("validate", "--", "false", cwd=d)
+    out = run("status", cwd=d, check=True).stdout
+    ok("RED" in out, f"and a failing one must still read RED: {out[:200]}")
+
+
+@case
 def a_declaration_is_never_rendered_as_a_command_that_passed():
     """Every list of validation records goes through one renderer, diagnostics included.
 
