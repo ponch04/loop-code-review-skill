@@ -1398,6 +1398,12 @@ def cmd_status(a):
             print(f"  #{p['n']}  score {metric(r['score'])}  findings {r['resolved']}/{r['findings']} resolved"
                   f"  understood={r['understood']}  test-evidence={metric(r.get('test_evidence'), 'not assessed')}"
                   f"  test-score={metric(r.get('test_score'))}")
+            # A field the CLI accepts and the state keeps must reach the text output too:
+            # `status --json` is for machines, and this is the rendering an agent reads and
+            # transcribes. `--note` was recordable and invisible, which makes it a place to
+            # put something that then silently does not exist.
+            for line in (r.get("note") or "").splitlines():
+                print(f"      note: {line}")
         elif p.get("aborted"):
             print(f"  #{p['n']}  (aborted: {p.get('abort_reason', 'unspecified')})")
         else:
