@@ -1181,6 +1181,18 @@ def none_and_a_command_are_refused_together_by_both_validate_commands():
     ok(run("validate-drop", "--none", cwd=d).returncode == 0,
        "and each form on its own must still work")
 
+    # `--reason` is the sentence the reviewer is given in place of a check, so in `validate`
+    # it belongs to `--none`. Passed with a command it was read by nothing and dropped in
+    # silence: the operator's explanation went nowhere and the record kept no trace of it.
+    r = run("validate", "--reason", "flaky on CI", "--", "echo real", cwd=d)
+    ok(r.returncode != 0 and "--reason" in r.stderr,
+       f"validate must refuse --reason alongside a command: rc={r.returncode} {r.stderr.strip()[:160]}")
+    # In `validate-drop` the reason annotates the retraction, not a declaration, so both
+    # forms carry one.
+    ok(run("validate-drop", "--force", "--reason", "superseded", "--", "echo real",
+           cwd=d).returncode == 0,
+       "validate-drop must keep --reason with a command")
+
 
 @case
 def a_mistaken_no_check_declaration_can_be_withdrawn_by_name():
