@@ -1027,53 +1027,93 @@ def cmd_validate_drop(a):
     print_validation(current_validation(state), state=state)
 
 
+def pass_start_blockers(state, force=False):
+    """Why `pass-start` would refuse right now, as `(key, payload)` in gate order.
+
+    The gate is not the only thing that answers this question: `pass-abort` tells the
+    operator what the next `pass-start` will do, and it used to answer from one condition of
+    the several — it compared fingerprints and promised the pass would be granted, while a
+    pass recorded earlier on that same fingerprint made the gate refuse. A hint that names
+    the way out has to be computed by the thing that decides it.
+    """
+    out = []
+    op = open_pass(state)
+    if op:
+        return [("open", op)]
+    lp = last_recorded_pass(state)
+    if len(state["passes"]) + 1 > state["max_passes"] and not force:
+        out.append(("limit", state["max_passes"]))
+    if lp and lp["fingerprint"] == state["fingerprint_current"] and not force:
+        out.append(("unchanged", lp))
+    if not state.get("allow_empty") and scope_is_empty(state["scope"],
+                                                       state.get("mode", "changes"),
+                                                       state.get("base")):
+        out.append(("empty", None))
+    cur = current_validation(state)
+    red = [v for v in cur if v["exit"] != 0]
+    if not cur:
+        out.append(("no-validation", None))
+    never_ran = [v for v in red if v["exit"] in NEVER_RAN]
+    if never_ran:
+        out.append(("never-ran", never_ran))
+    if red and not never_ran and state.get("mode", "changes") != "project":
+        out.append(("red", red))
+    missing = missing_since_last_pass(state)
+    if missing and not force:
+        out.append(("missing", missing))
+    return out
+
+
 def cmd_pass_start(a):
     os.chdir(repo_root())
     state = load()
     state["fingerprint_current"] = fp_of(state)
-    op = open_pass(state)
-    if op:
-        die(f"pass {op['n']} is still open; record it, or `pass-abort --reason ...` if the "
-            "scope moved while the reviewer was reading and its review is of a state that "
-            "no longer exists")
     lp = last_recorded_pass(state)
     n = len(state["passes"]) + 1
-    if n > state["max_passes"] and not a.force:
-        die(f"pass limit {state['max_passes']} reached — outcome is INCOMPLETE unless the user asked for persistence (then use --force)")
-    if lp and lp["fingerprint"] == state["fingerprint_current"] and not a.force:
-        die("scoped changes are unchanged since the last pass; clarify with the same reviewer instead of opening a new full review (--force to override)")
-    if not state.get("allow_empty") and scope_is_empty(state["scope"],
-                                                       state.get("mode", "changes"),
-                                                       state.get("base")):
-        die("the scope is empty now — nothing is under review. It emptied after `init`: the "
-            "work was committed (re-`init` with `--base`), reverted or stashed, or the area's "
-            "files are gone. A pass over nothing is not a review.", code=NO_CHANGES)
+    for key, payload in pass_start_blockers(state, a.force):
+        if key == "open":
+            die(f"pass {payload['n']} is still open; record it, or `pass-abort --reason ...` if the "
+                "scope moved while the reviewer was reading and its review is of a state that "
+                "no longer exists")
+        if key == "limit":
+            die(f"pass limit {payload} reached — outcome is INCOMPLETE unless the user asked for persistence (then use --force)")
+        if key == "unchanged":
+            die("scoped changes are unchanged since the last pass; clarify with the same reviewer instead of opening a new full review (--force to override)")
+        if key == "empty":
+            die("the scope is empty now — nothing is under review. It emptied after `init`: the "
+                "work was committed (re-`init` with `--base`), reverted or stashed, or the area's "
+                "files are gone. A pass over nothing is not a review.", code=NO_CHANGES)
+        if key == "no-validation":
+            die("no validation recorded for the current state; run `validate` first")
+        if key == "never-ran":
+            # A 126/127 record means the command never executed. Project mode tolerates a
+            # *failing* check because an inherited area is reviewed as it stands — but a typo
+            # or a missing tool is not a property of the area, and letting it through would
+            # stamp it `[inherited]` and tell a fresh reviewer that the area's own checks
+            # fail. Refuse in every mode. Two different exits, and naming the wrong one is
+            # how the gate got walked around: a check the last pass rested on is still
+            # evidence once its tool disappears, so retiring it needs `--force`.
+            prior = (evidence_set(validation_at(state, lp["fingerprint"]))
+                     if lp is not None and lp["fingerprint"] != state["fingerprint_current"] else {})
+            carried = [v["cmd"] for v in payload if v["cmd"] in prior]
+            die("these command(s) never ran (missing tool or typo), so they are evidence about "
+                "nothing: " + "; ".join(f"`{v['cmd']}` (exit {v['exit']})" for v in payload)
+                + " — fix the command and re-run it, or retract the record with `validate-drop`."
+                + (" Note that " + "; ".join(f"`{c}`" for c in carried)
+                   + " carried the last pass, so retiring it takes `validate-drop --force`, "
+                     "a human decision." if carried else ""))
+        if key == "red":
+            die("validation is red for the current state; fix it, or re-run the command if the failure was environmental "
+                "(if it never ran at all — typo, missing tool — retract it with `validate-drop`)")
+        if key == "missing":
+            die(f"pass {lp['n']} rested on {len(payload)} check(s) not re-run since the change: "
+                + "; ".join(f"`{c}`" for c in payload)
+                + " — re-run them. Retiring one of these weakens the evidence this review rests on, "
+                  "even if the tool that ran it is gone, so it needs `validate-drop --force` — "
+                  "a human decision. (Plain `validate-drop` only clears a command that never ran "
+                  "here and no pass rested on.)")
     cur = current_validation(state)
-    if not cur:
-        die("no validation recorded for the current state; run `validate` first")
     red = [v for v in cur if v["exit"] != 0]
-    # A 126/127 record means the command never executed. Project mode tolerates a *failing*
-    # check because an inherited area is reviewed as it stands — but a typo or a missing
-    # tool is not a property of the area, and letting it through would stamp it `[inherited]`
-    # and tell a fresh reviewer that the area's own checks fail. Refuse in every mode.
-    never_ran = [v for v in red if v["exit"] in NEVER_RAN]
-    if never_ran:
-        # Two different exits, and naming the wrong one is how the gate got walked around:
-        # a check the last pass rested on is still evidence once its tool disappears, so
-        # retiring it needs `--force`; only a command no pass leaned on clears for free.
-        lrp = last_recorded_pass(state)
-        prior = (validation_at(state, lrp["fingerprint"])
-                 if lrp is not None and lrp["fingerprint"] != state["fingerprint_current"] else {})
-        carried = [v["cmd"] for v in never_ran if v["cmd"] in prior]
-        die("these command(s) never ran (missing tool or typo), so they are evidence about "
-            "nothing: " + "; ".join(f"`{v['cmd']}` (exit {v['exit']})" for v in never_ran)
-            + " — fix the command and re-run it, or retract the record with `validate-drop`."
-            + (" Note that " + "; ".join(f"`{c}`" for c in carried)
-               + " carried the last pass, so retiring it takes `validate-drop --force`, "
-                 "a human decision." if carried else ""))
-    if red and state.get("mode", "changes") != "project":
-        die("validation is red for the current state; fix it, or re-run the command if the failure was environmental "
-            "(if it never ran at all — typo, missing tool — retract it with `validate-drop`)")
     if red:
         # An inherited area is reviewed as it stands, so "fix red validation before asking
         # for a review" has no addressee: the failing check is a property of the area, not
@@ -1090,14 +1130,6 @@ def cmd_pass_start(a):
         print("  in report-only write them into the findings file; in fix mode they still "
               "block `accept`, so fix them or close the area incomplete with them as the "
               "blocker", file=sys.stderr)
-    missing = missing_since_last_pass(state)
-    if missing and not a.force:
-        die(f"pass {lp['n']} rested on {len(missing)} check(s) not re-run since the change: "
-            + "; ".join(f"`{c}`" for c in missing)
-            + " — re-run them. Retiring one of these weakens the evidence this review rests on, "
-              "even if the tool that ran it is gone, so it needs `validate-drop --force` — "
-              "a human decision. (Plain `validate-drop` only clears a command that never ran "
-              "here and no pass rested on.)")
     entry = {"n": n, "opened": now(), "fingerprint": state["fingerprint_current"], "result": None}
     if red:
         entry["opened_over_red"] = [v["cmd"] for v in red]
@@ -1172,9 +1204,18 @@ def cmd_pass_abort(a):
     save(state)
     print(f"pass {lp['n']} aborted ({lp['abort_reason']}); it counts as used. "
           f"{state['max_passes'] - len(state['passes'])} of {state['max_passes']} left")
-    if lp["fingerprint"] == state["fingerprint_current"]:
-        print("note: the scope has not moved since that pass opened; the next `pass-start` is "
-              "still granted, because an aborted pass never counted as recorded", file=sys.stderr)
+    # Answered by the gate itself, not by re-deriving one of its conditions. This note used
+    # to compare fingerprints and promise the next pass would be granted — true only when no
+    # *recorded* pass sits on this fingerprint. After a pass opened with `--force` on an
+    # unchanged scope and then aborted, the gate refused the pass the note had promised.
+    blocking = pass_start_blockers(state)
+    if not blocking:
+        print("note: the next `pass-start` is granted — an aborted pass never counted as "
+              "recorded, so it does not stand in the way of the next one", file=sys.stderr)
+    elif lp["fingerprint"] == state["fingerprint_current"]:
+        print(f"note: the next `pass-start` will still refuse ({blocking[0][0]}): the scope has "
+              "not moved, and the abort is not what stands in the way — an aborted pass never "
+              "counted as recorded", file=sys.stderr)
 
 
 def cmd_pass_record(a):

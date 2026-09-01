@@ -737,6 +737,35 @@ def a_command_that_never_ran_is_droppable_a_failure_is_not():
 
 
 @case
+def the_abort_note_agrees_with_what_pass_start_will_actually_do():
+    """The hint is computed by the gate, not by re-deriving one of its conditions.
+
+    `pass-abort` compared fingerprints and promised the next `pass-start` would be granted.
+    True only when no *recorded* pass sits on that fingerprint: open a pass with `--force` on
+    an unchanged scope, abort it, and the gate refuses the pass the note had just promised —
+    leaving the operator to conclude the abort had cost them something it had not.
+    """
+    d = repo({"src/a.py": "1\n"})
+    write(d, "src/a.py", "2\n")
+    run("init", "--", "src", cwd=d, check=True)
+    run("validate", "--", "true", cwd=d)
+    run("pass-start", cwd=d, check=True)
+    err = run("pass-abort", "--reason", "unusable reviewer", cwd=d, check=True).stderr
+    ok("is granted" in err, f"with nothing recorded the note must promise the pass: {err.strip()[:200]}")
+    ok(run("pass-start", cwd=d).returncode == 0, "and the gate must grant it")
+
+    run("pass-record", "--score", "8", "--findings", "0", "--understood",
+        "--test-evidence", "trusted", cwd=d, check=True)
+    run("pass-start", "--force", cwd=d, check=True)     # forced onto the same fingerprint
+    err = run("pass-abort", "--reason", "unusable again", cwd=d, check=True).stderr
+    ok("will still refuse" in err,
+       f"with a recorded pass on this fingerprint the note must say so: {err.strip()[:200]}")
+    r = run("pass-start", cwd=d)
+    ok(r.returncode != 0 and "unchanged" in r.stderr,
+       f"and the gate must refuse for that reason: rc={r.returncode} {r.stderr.strip()[:160]}")
+
+
+@case
 def accept_reports_the_pass_limit_even_when_every_pass_was_aborted():
     """The limit counts passes opened, so the hint must not depend on one being recorded.
 
