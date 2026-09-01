@@ -1809,6 +1809,58 @@ def no_text_file_is_opened_at_the_mercy_of_the_platform_locale():
     ok(not bare, "text open() without encoding= at " + ", ".join(bare))
 
 
+def declared_parameters(node):
+    """Every parameter of a function definition, in every form the syntax allows.
+
+    `args + kwonlyargs` is the pair people write from memory, and it silently omits
+    positional-only parameters (`def fn(x, /)`) and the `*args`/`**kwargs` catch-alls. A
+    dead parameter written in one of those forms escaped the check entirely — a guard that
+    fails open, which is the kind that reads as coverage while covering nothing.
+    """
+    a = node.args
+    named = a.posonlyargs + a.args + a.kwonlyargs
+    return [x.arg for x in named] + [x.arg for x in (a.vararg, a.kwarg) if x]
+
+
+def unread_parameters(src):
+    """`name(param) at line N` for every parameter its own body never reads.
+
+    Extracted so the check can be exercised on known cases rather than only on this
+    repository, where whichever forms happen to appear decide what it is proved to catch.
+    """
+    stale = []
+    for node in ast.walk(ast.parse(src)):
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        read = ({n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
+                | {n.attr for n in ast.walk(node) if isinstance(n, ast.Attribute)})
+        for arg in declared_parameters(node):
+            if arg in read or (arg == "a" and node.name.startswith("cmd_")):
+                continue
+            stale.append(f"{node.name}({arg}) at line {node.lineno}")
+    return stale
+
+
+@case
+def the_unread_parameter_guard_sees_every_parameter_form():
+    """Checked against known cases, because the repository only proves what it happens to use.
+
+    The guard read `args + kwonlyargs`, so a dead positional-only parameter or an unused
+    `*args` was invisible to it — it failed open, and a guard that fails open reads as
+    coverage while covering nothing. Every form the syntax allows is asserted here, together
+    with the one exemption, so neither can quietly go missing.
+    """
+    ok(unread_parameters("def f(x):\n    return 1"), "a plain unused parameter must be caught")
+    ok(not unread_parameters("def f(x):\n    return x"), "a used one must not be")
+    ok(unread_parameters("def f(x, /):\n    return 1"), "positional-only counts too")
+    ok(unread_parameters("def f(*, x):\n    return 1"), "keyword-only counts too")
+    ok(unread_parameters("def f(*rest):\n    return 1"), "an unused *args counts too")
+    ok(unread_parameters("def f(**kw):\n    return 1"), "an unused **kwargs counts too")
+    ok(not unread_parameters("def f(*rest):\n    return rest"), "a used *args must not be")
+    ok(not unread_parameters("def cmd_x(a):\n    return 1"),
+       "the dispatcher's `a.fn(a)` contract stays exempt")
+
+
 @case
 def no_helper_declares_a_parameter_it_never_reads():
     """A parameter nobody reads is a claim about the code that nothing enforces.
@@ -1819,17 +1871,7 @@ def no_helper_declares_a_parameter_it_never_reads():
     Command functions are exempt: the dispatcher calls every one as `a.fn(a)`, so `a` is
     part of the contract whether that command needs it or not.
     """
-    src = read_text(os.path.join(ROOT, "scripts", "loop_review.py"))
-    stale = []
-    for node in ast.walk(ast.parse(src)):
-        if not isinstance(node, ast.FunctionDef):
-            continue
-        read = ({n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
-                | {n.attr for n in ast.walk(node) if isinstance(n, ast.Attribute)})
-        for arg in [a.arg for a in node.args.args + node.args.kwonlyargs]:
-            if arg in read or (arg == "a" and node.name.startswith("cmd_")):
-                continue
-            stale.append(f"{node.name}({arg}) at line {node.lineno}")
+    stale = unread_parameters(read_text(os.path.join(ROOT, "scripts", "loop_review.py")))
     ok(not stale, "parameter(s) never read: " + "; ".join(stale))
 
 
