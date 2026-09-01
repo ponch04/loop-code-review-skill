@@ -11,21 +11,21 @@ scoped paths — an inherited area reviewed as a whole. A project review is a qu
 area loops, tracked in .loop-review/project.json by the `project` commands.
 
 Commands:
-  init [--max-passes N] [--mode changes|project] [--base REF] [--allow-empty]
+  init [--max-passes N] [--mode changes|project] [--base REF] [--allow-empty] [--force]
        [--task-brief TEXT | --task-brief-file PATH] [--scope-note TEXT] -- <paths...>
                                            start a loop over paths (task diff or whole area)
-  project init [--max-passes N] [--report-only] [--allow-empty] -- <area paths...>
+  project init [--max-passes N] [--report-only] [--allow-empty] [--force] -- <area paths...>
                                            queue a whole-project review, one loop per area
   project next                             open the loop for the next pending area
-  project close                            record the current area's outcome, free the loop
+  project close [--force]                  record the current area's outcome, free the loop
   project status [--json]                  ledger of areas and outcomes
   validate -- <command...>                 run a validation command, record result
   validate --none --reason TEXT            record that no executable check applies here
   scope -- <paths...>                      widen the open loop's scope (never narrows it)
-  validate-drop [--force] {-- <command...> | --none}
+  validate-drop [--force] [--reason TEXT] {-- <command...> | --none}
                                            retract a record for a command that never ran,
                                            or (--force) retire a check inherited from the last pass
-  pass-start                               open a full-review pass (checks gates)
+  pass-start [--force]                     open a full-review pass (checks gates)
   pass-abort [--reason TEXT]               discard an open pass whose review went stale
   brief [--force] [--task-brief TEXT | --task-brief-file PATH] [--scope-note TEXT]
                                            record the brief, or the hunk-level scope note,
