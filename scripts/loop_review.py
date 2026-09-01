@@ -857,19 +857,27 @@ def cmd_scope(a):
               "a new pass so a reviewer actually sees the added paths")
 
 
-def check_none_or_command(a, verb, empty_hint):
-    """`--none` is about the declaration, a command after `--` is about a run: exactly one.
+def check_none_or_command(a, verb, empty_hint, reason_needs_none=False):
+    """The whole flag combination for `validate`/`validate-drop`, checked in one place.
 
-    `validate-drop` refused both-at-once; `validate` did not, and `validate --none --reason X
-    -- pytest -q` silently recorded "no executable check applies" while dropping the command
-    the operator wrote. That is worse than a rejected typo: the loop then tells the reviewer
-    there was nothing to run, on a surface that has a test suite.
+    `--none` is about the declaration, a command after `--` is about a run: exactly one. And
+    in `validate`, `--reason` belongs to the declaration alone — it is the sentence the
+    reviewer is given in place of a check. Passed alongside a command it was read by nothing
+    and dropped without a word, so an operator who explained why a check is unusual got a
+    record that does not carry the explanation. Checking pairs one at a time is what left
+    that gap: the previous pass closed `--none` + command and stopped there.
+
+    `validate-drop` keeps `--reason` in both forms — there it annotates the retraction, not
+    the declaration, and a retraction has a reason whichever record it names.
     """
     if a.none and a.command:
         die(f"{verb} takes --none or a command after `--`, not both: `--none` records that "
             "no executable check applies, a command names one to run")
     if not a.none and not a.command:
         die(empty_hint)
+    if reason_needs_none and a.reason and not a.none:
+        die(f"{verb} --reason belongs to `--none`: it is what the reviewer is told in place "
+            "of a check. A command's record carries its exit code, not a reason")
 
 
 def cmd_validate(a):
@@ -877,7 +885,7 @@ def cmd_validate(a):
     state = load()
     check_none_or_command(a, "validate",
                           "validate needs a command after `--`, or `--none --reason ...` "
-                          "when none applies")
+                          "when none applies", reason_needs_none=True)
     if a.none:
         # An inherited area of prose, config or fixtures has no test, typecheck, lint or
         # build. `pass-start` refuses without a validation record and `--force` does not
