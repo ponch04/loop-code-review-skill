@@ -523,6 +523,26 @@ def metric(value, absent="not given"):
     return absent if value is None else value
 
 
+def validation_summary(cur):
+    """The aggregate label for a set of validation records, in one place.
+
+    A `validate --none` record carries `exit: 0` so that exit condition 1 is satisfied, but
+    it is a declaration that nothing ran. The header asked only "are all exits zero?", so a
+    loop whose entire validation was that declaration printed `1 command(s), GREEN` — the
+    exact reading AGENTS.md forbids ("it is not a green `true`"), and the line an agent
+    transcribes into the reviewer's prompt. The per-record rendering was fixed for this once;
+    the header kept its own copy of the question and kept answering it wrong.
+    """
+    if not cur:
+        return "RED/none"
+    runs = [v for v in cur if not is_declaration(v)]
+    if any(v["exit"] != 0 for v in runs):
+        return "RED/none"
+    if not runs:
+        return "NOTHING RAN (absence declared)"
+    return "GREEN"
+
+
 def print_validation(cur, header="validation on current state", state=None, file=None):
     """One rendering of validation state for every text-mode command, diagnostics included.
 
@@ -537,8 +557,7 @@ def print_validation(cur, header="validation on current state", state=None, file
     retract.
     """
     out = sys.stdout if file is None else file
-    print(f"{header}: {len(cur)} command(s), " +
-          ("GREEN" if cur and all(v["exit"] == 0 for v in cur) else "RED/none"), file=out)
+    print(f"{header}: {len(cur)} command(s), {validation_summary(cur)}", file=out)
     for v in cur:
         if is_declaration(v):
             print(f"  - no executable check applies"
