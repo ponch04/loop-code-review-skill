@@ -860,6 +860,38 @@ def amend_refuses_while_a_newer_pass_is_open():
 
 
 @case
+def every_recorded_field_of_a_pass_reaches_the_text_status():
+    """`status --json` is for machines; the text rendering is what an agent reads.
+
+    A field the CLI accepts and `state.json` keeps, but the text output drops, is a place to
+    put something that then silently does not exist — `--note` was recordable and invisible
+    for as long as it existed. The exemptions are named here rather than assumed, so the next
+    field added to a pass result has to be either rendered or listed with a reason.
+    """
+    d = repo({"src/a.py": "1\n"})
+    write(d, "src/a.py", "2\n")
+    run("init", "--", "src", cwd=d, check=True)
+    run("validate", "--", "true", cwd=d)
+    run("pass-start", cwd=d, check=True)
+    run("pass-record", "--score", "8", "--findings", "1", "--understood",
+        "--test-evidence", "trusted", "--test-score", "7",
+        "--note", "reviewer replaced after one clarification", cwd=d, check=True)
+    run("resolve", "--fixed", "1", cwd=d, check=True)
+    out = run("status", cwd=d, check=True).stdout
+    result = read_state(d)["passes"][0]["result"]
+    # `resolved` and `findings` are rendered together as "0/1 resolved"; the rest are
+    # bookkeeping the text view deliberately summarises rather than dumps.
+    shown_together = {"resolved", "findings"}
+    bookkeeping = {"recorded", "resolution_log", "amendments"}
+    missing = [k for k, v in result.items()
+               if k not in shown_together and k not in bookkeeping
+               and v is not None and str(v) not in out and k.replace("_", "-") not in out]
+    ok(not missing, f"recorded field(s) invisible in text status: {missing} — output was:\n{out}")
+    ok("reviewer replaced after one clarification" in out,
+       f"the note itself must be readable, not just its key: {out}")
+
+
+@case
 def a_metric_the_reviewer_withheld_never_prints_as_none():
     """`--score` is optional on purpose, so every line that shows one must say so in words.
 
