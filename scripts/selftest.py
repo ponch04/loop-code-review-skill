@@ -1738,6 +1738,55 @@ def a_glue_operator_missing_a_path_is_refused_wherever_it_sits():
        f"and without `+` they stay separate: {[x['paths'] for x in led['areas']]}")
 
 
+def call_arg(node, index, name):
+    """An argument of a call, whether it was passed positionally or by keyword.
+
+    A guard that reads `node.args[1]` alone sees `open(p, "rb")` and misses
+    `open(p, mode="rb")` — and misses it in the direction that accuses correct code, which is
+    how a check stops being trusted.
+    """
+    if len(node.args) > index:
+        return node.args[index]
+    return next((k.value for k in node.keywords if k.arg == name), None)
+
+
+def bare_text_opens(src):
+    """Lines in `src` where `open()` decodes by whatever locale the machine has.
+
+    Extracted from the case below so the check itself can be exercised: a guard nothing
+    tests is a claim about the codebase resting on one reading of the AST.
+    """
+    out = []
+    for node in ast.walk(ast.parse(src)):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                and node.func.id == "open"):
+            continue
+        if any(k.arg == "encoding" for k in node.keywords):
+            continue
+        mode = call_arg(node, 1, "mode")
+        if isinstance(mode, ast.Constant) and "b" in mode.value:
+            continue
+        out.append(node.lineno)
+    return out
+
+
+@case
+def the_locale_guard_reads_a_keyword_mode_too():
+    """The guard is checked against known-good and known-bad calls, not only against the repo.
+
+    It inspected `node.args[1]` and nothing else, so `open(p, mode="rb")` — a binary read
+    written the other legal way — was reported as decoding by the platform locale. Wrong in
+    the accusing direction: the suite would have failed on correct code, and the next person
+    would have learned to work around the check rather than trust it.
+    """
+    ok(bare_text_opens('open(p)') == [1], "a bare text open must be reported")
+    ok(bare_text_opens('open(p, "r")') == [1], "an explicit text mode too")
+    ok(bare_text_opens('open(p, "rb")') == [], "a positional binary mode is exempt")
+    ok(bare_text_opens('open(p, mode="rb")') == [], "and so is a keyword binary mode")
+    ok(bare_text_opens('open(p, encoding="utf-8")') == [], "an explicit encoding is exempt")
+    ok(bare_text_opens('open(p, "w", encoding="utf-8")') == [], "in either argument order")
+
+
 @case
 def no_text_file_is_opened_at_the_mercy_of_the_platform_locale():
     """`open()` without `encoding=` decodes by whatever locale the machine has.
@@ -1756,16 +1805,7 @@ def no_text_file_is_opened_at_the_mercy_of_the_platform_locale():
     """
     bare = []
     for rel in ("scripts/loop_review.py", "scripts/selftest.py"):
-        for node in ast.walk(ast.parse(read_text(os.path.join(ROOT, rel)))):
-            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-                    and node.func.id == "open"):
-                continue
-            if any(k.arg == "encoding" for k in node.keywords):
-                continue
-            mode = node.args[1] if len(node.args) > 1 else None
-            if isinstance(mode, ast.Constant) and "b" in mode.value:
-                continue
-            bare.append(f"{rel}:{node.lineno}")
+        bare += [f"{rel}:{n}" for n in bare_text_opens(read_text(os.path.join(ROOT, rel)))]
     ok(not bare, "text open() without encoding= at " + ", ".join(bare))
 
 
