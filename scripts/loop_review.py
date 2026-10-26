@@ -1521,11 +1521,8 @@ def cmd_pass_record(a):
         "recorded": now(),
     }
     save(state)
-    print(f"pass {lp['n']} recorded: score {metric(a.score)}, "
-          f"{a.findings} finding(s), understood={bool(a.understood)}, "
-          f"test evidence {metric(a.test_evidence, 'not assessed')}")
-    if a.findings == 0 and a.score is not None and a.score < 9.5:
-        print("note: score below 9.5 with zero findings — treat the number as calibration noise; findings control the loop")
+    print(pass_summary(lp["n"], lp["result"]).replace(f"pass {lp['n']}:", f"pass {lp['n']} recorded:", 1))
+    calibration_note(lp["result"])
 
 
 def require_recorded_pass(state, action, missing):
@@ -1581,8 +1578,9 @@ def cmd_amend(a):
     state["fingerprint_current"] = fp_of(state)
     save(state)
     print(f"pass {lp['n']} amended: " + ", ".join(f"{k}={v}" for k, v in given.items()))
-    print(f"pass {lp['n']}: score {metric(r['score'])}, {r['resolved']}/{r['findings']} resolved, "
-          f"understood={r['understood']}, test evidence {metric(r.get('test_evidence'), 'not assessed')}")
+    print(pass_summary(lp["n"], r))
+    if "score" in given or "findings" in given:
+        calibration_note(r)
     if state["fingerprint_current"] != lp["fingerprint"]:
         print("note: scoped changes moved since this pass — the review is stale; validate and open a new pass")
 
@@ -1921,6 +1919,30 @@ def parse_areas(raw, root):
     return out
 
 
+# Every metric a closed ledger row carries, in one place. The row was spelled out by hand in
+# `project close` and in `settle_area`, and both dropped `test_score` and `note`: the area
+# prompt asks for a test quality score, SKILL.md's report quotes it from `project status
+# --json`, and `project close` deleted the only copy with `state.json`.
+LEDGER_METRICS = ("passes", "findings", "resolved", "score", "test_score", "test_evidence",
+                  "understood", "note", "findings_file")
+
+
+def pass_summary(n, r):
+    """The one-line state of a pass result, as `pass-record` and `amend` both print it."""
+    return (f"pass {n}: score {metric(r.get('score'))}, test score "
+            f"{metric(r.get('test_score'))}, {r.get('resolved', 0)}/{r['findings']} resolved, "
+            f"understood={bool(r.get('understood'))}, test evidence "
+            f"{metric(r.get('test_evidence'), 'not assessed')}"
+            + (f", note: {r['note']}" if r.get("note") else ""))
+
+
+def calibration_note(r):
+    """Asked of the result as it stands, so `amend --score` meets it as `pass-record` did."""
+    if r["findings"] == 0 and r.get("score") is not None and r["score"] < 9.5:
+        print("note: score below 9.5 with zero findings — treat the number as calibration "
+              "noise; findings control the loop")
+
+
 def settle_area(area, blockers, passes=None):
     """Record an area that produced no usable review, with every metric explicitly absent.
 
@@ -1932,8 +1954,7 @@ def settle_area(area, blockers, passes=None):
     that went wrong.
     """
     area.update({"status": "incomplete", "closed": now(), "blockers": blockers,
-                 "passes": passes, "findings": None, "resolved": None, "score": None,
-                 "test_evidence": None, "understood": None, "findings_file": None})
+                 **{k: None for k in LEDGER_METRICS}, "passes": passes})
 
 
 def cmd_project_init(a):
@@ -2197,11 +2218,11 @@ def cmd_project_close(a):
     recorded = [x["result"] for x in state["passes"] if x.get("result")]
     cur["findings"] = sum(x["findings"] for x in recorded) if recorded else None
     cur["resolved"] = sum(x["resolved"] for x in recorded) if recorded else None
-    cur["score"] = r["score"] if r else None
-    # Exit condition 4's verdict would otherwise die with state.json: in report-only mode
-    # `blockers()` is never consulted, so the ledger is the only place it can be reported.
-    cur["test_evidence"] = r.get("test_evidence") if r else None
-    cur["understood"] = r.get("understood") if r else None
+    # The last recorded pass's verdicts and metrics would otherwise die with state.json: in
+    # report-only mode `blockers()` is never consulted, so the ledger is the only place they
+    # can be reported. Read off the shared list, so a field cannot be left behind again.
+    for k in ("score", "test_score", "test_evidence", "understood", "note"):
+        cur[k] = r.get(k) if r else None
     cur["findings_file"] = ffile if findings_problem(ffile) is None else None
     save_project(p)
     os.remove(STATE_FILE)
@@ -2242,6 +2263,8 @@ def cmd_project_status(a):
             line += f"  findings {metric(resolved, '?')}/{x['findings']}"
         if x.get("score") is not None:
             line += f"  score {x['score']}"
+        if x.get("test_score") is not None:
+            line += f"  test-score {x['test_score']}"
         if x.get("findings_file") or reviewed:
             line += f"  findings-file {metric(x.get('findings_file'), 'not written')}"
         if x.get("blockers"):

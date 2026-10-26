@@ -563,6 +563,49 @@ def a_nested_area_closes_on_the_findings_file_the_script_names():
 
 
 @case
+def the_ledger_keeps_every_metric_the_pass_recorded():
+    """`project close` deletes state.json, so a metric the row does not copy is gone.
+
+    The area prompt asks for a test quality score and SKILL.md's report quotes it from
+    `project status --json`, but the row was built by hand in two places and neither copied
+    `test_score` or `note`. The summary `pass-record` and `amend` print left them out too,
+    and `amend --score` skipped the calibration note `pass-record` gives.
+    """
+    fields = set(getattr(module(), "LEDGER_METRICS", ()))
+    recorded = {"score", "test_score", "test_evidence", "understood", "note"}
+    ok(recorded <= fields,
+       f"every verdict and metric a pass records must be a ledger field: "
+       f"{sorted(recorded - fields)}")
+
+    d = repo({"pkg/a.py": "x\n", "lib/b.py": "y\n"})
+    run("project", "init", "--report-only", "--", "pkg", "lib", cwd=d, check=True)
+    run("project", "next", cwd=d, check=True)
+    run("validate", "--", "true", cwd=d)
+    run("pass-start", cwd=d, check=True)
+    out = run("pass-record", "--findings", "0", "--understood", "--test-evidence", "trusted",
+              "--test-score", "7", "--note", "tests mock the network", cwd=d, check=True).stdout
+    ok("test score 7" in out and "tests mock the network" in out,
+       f"pass-record must echo what it recorded: {out.strip()[:200]}")
+    out = run("amend", "--score", "9", cwd=d, check=True).stdout
+    ok("test score 7" in out and "calibration noise" in out,
+       f"amend must print the same summary and the same note as pass-record: {out.strip()[:300]}")
+    findings(d, "pkg", "A. clean\nC. trusted, 7\nD. 9\n")
+    run("project", "close", cwd=d, check=True)
+    row = read_state(d, "project.json")["areas"][0]
+    ok(row.get("test_score") == 7 and row.get("note") == "tests mock the network",
+       f"the ledger must keep the test score and the note: {row}")
+    ok("test-score 7" in run("project", "status", cwd=d, check=True).stdout,
+       "and the text ledger must show the test score")
+
+    run("project", "next", cwd=d, check=True)                      # `lib`: its state is lost
+    os.remove(os.path.join(d, ".loop-review", "state.json"))
+    run("project", "close", "--force", cwd=d, check=True)
+    rows = read_state(d, "project.json")["areas"]
+    ok(set(rows[0]) == set(rows[1]) and recorded <= set(rows[1]),
+       f"a settled row carries the same fields: {sorted(set(rows[0]) ^ set(rows[1]))}")
+
+
+@case
 def every_closed_ledger_row_has_the_same_shape():
     """`project.json` is the deliverable of a project review, so its rows are a schema.
 
