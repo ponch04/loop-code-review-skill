@@ -1607,9 +1607,9 @@ def a_retirement_never_rewrites_what_the_pass_rested_on():
 def a_check_any_pass_rested_on_needs_force_not_only_the_last_one():
     """"No recorded pass rested on it" means no pass, not the last recorded one.
 
-    A later pass opened without the check — `pass-start --force`, a human call past the
-    shrinkage gate — made it look unclaimed: on the next state a re-run to 127 read as a typo
-    and a plain `validate-drop` cleared it, though pass 1 had been granted on it.
+    A later pass opened without the check — after a human retired it — made it look
+    unclaimed once it was run again: on the next state a re-run to 127 read as a typo and a
+    plain `validate-drop` cleared it, though pass 1 had been granted on it.
     """
     d = repo({"src/a.py": "1\n"})
     tool = os.path.join(d, "suite.sh")
@@ -1625,20 +1625,21 @@ def a_check_any_pass_rested_on_needs_force_not_only_the_last_one():
     write(d, "src/a.py", "3\n")
     run("resolve", "--fixed", "1", cwd=d, check=True)
     run("validate", "--", "true", cwd=d)
-    run("pass-start", "--force", cwd=d, check=True)  # the human opened pass 2 without it
+    run("validate-drop", "--force", "--", tool, cwd=d, check=True)   # the human retires it
+    run("pass-start", cwd=d, check=True)             # pass 2 rests on `true` alone
     run("pass-record", "--score", "8", "--findings", "1", "--understood",
         "--test-evidence", "trusted", cwd=d, check=True)
     write(d, "src/a.py", "4\n")                      # a new fingerprint
     run("resolve", "--fixed", "1", cwd=d, check=True)
     os.remove(tool)
     run("validate", "--", "true", cwd=d)
-    run("validate", "--", tool, cwd=d)               # -> exit 127
+    run("validate", "--", tool, cwd=d)               # -> exit 127, ending the retirement
     r = run("validate-drop", "--", tool, cwd=d)
     ok(r.returncode != 0 and "carried pass 1" in r.stderr and "--force" in r.stderr,
        f"pass 1 rested on it, so dropping it needs --force: rc={r.returncode} "
        f"{r.stderr.strip()[:160]}")
     r = run("pass-start", cwd=d)
-    ok(r.returncode != 0 and "never ran" in r.stderr and "carried the last pass" in r.stderr,
+    ok(r.returncode != 0 and "never ran" in r.stderr and "carried a recorded pass" in r.stderr,
        f"and pass-start's hint must say so too: {r.stderr.strip()[:240]}")
 
 
@@ -1676,6 +1677,47 @@ def report_only_close_needs_validation_that_ran():
     row = area("never-ran")
     ok(row["status"] == "incomplete" and any("never ran" in b for b in row["blockers"]),
        f"a check that never ran is evidence about nothing: {row['status']}, {row['blockers']}")
+
+
+@case
+def pass_start_force_never_waives_the_evidence_set():
+    """`--force` answers the limit and an unchanged scope; it never lets evidence shrink.
+
+    `pass_start_blockers` skipped the shrinkage gate under `--force`, so the documented
+    override for the pass limit also opened a pass on fewer checks, with no retirement in
+    the log — and the next gates compared against that pass alone, so `accept` signed off
+    without the check every earlier pass had rested on.
+    """
+    d = repo({"src/a.py": "1\n"})
+    write(d, "src/a.py", "2\n")
+    run("init", "--max-passes", "1", "--", "src", cwd=d, check=True)
+    run("validate", "--", "echo suite", cwd=d)
+    run("validate", "--", "echo lint", cwd=d)
+    run("pass-start", cwd=d, check=True)
+    run("pass-record", "--score", "7", "--findings", "1", "--understood",
+        "--test-evidence", "trusted", cwd=d, check=True)
+    write(d, "src/a.py", "3\n")
+    run("resolve", "--fixed", "1", cwd=d, check=True)
+    run("validate", "--", "echo lint", cwd=d)                    # suite not re-run
+    r = run("pass-start", "--force", cwd=d)                       # past the limit, by a human
+    ok(r.returncode != 0 and "not re-run since the change" in r.stderr
+       and "`echo suite` (pass 1)" in r.stderr,
+       f"--force for the limit must not open a pass without `echo suite`: rc={r.returncode} "
+       f"{r.stderr.strip()[:200]}")
+
+    # A state written while the gate could be waived: pass 2 rests on `echo lint` alone.
+    run("validate", "--", "echo suite", cwd=d)
+    run("pass-start", "--force", cwd=d, check=True)
+    run("pass-record", "--score", "9", "--findings", "0", "--understood",
+        "--test-evidence", "trusted", cwd=d, check=True)
+    st = read_state(d)
+    st["passes"][-1]["rested_on"] = ["echo lint"]
+    st["validation"] = [v for v in st["validation"]
+                        if not (v["cmd"] == "echo suite" and v["fingerprint"] == st["passes"][-1]["fingerprint"])]
+    write_state(d, st)
+    r = run("accept", cwd=d)
+    ok(r.returncode != 0 and "`echo suite` (pass 1)" in r.stdout + r.stderr,
+       f"accept must still demand what pass 1 rested on: {(r.stdout + r.stderr).strip()[:200]}")
 
 
 @case
