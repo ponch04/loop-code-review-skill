@@ -532,18 +532,34 @@ def pass_rested_on(state, cmd):
 
 
 def missing_since_last_pass(state):
-    """Commands the last pass rested on that have no record on the current state.
+    """`{cmd: pass}` for checks a recorded pass rested on that have no record here.
 
     Evidence may not silently shrink: after a fix batch, re-running one quick check would
     otherwise be enough to open the next pass, and acceptance only ever looks at the
     commands present on the accepted fingerprint. So a later pass may not be granted on a
-    weaker set than the pass before it (SKILL.md steps 2 and 5).
+    weaker set than the passes before it (SKILL.md steps 2 and 5).
+
+    Every recorded pass, not the last one. Read from the last alone, one pass opened
+    without a check — before `pass-start --force` stopped skipping this gate, or in a state
+    written then — dropped it for good: the next gate compared against the pass that lacked
+    it, and `accept` signed off on the shrunken set with no retirement anywhere in the log.
+    The only way out of the set is `validate-drop --force`, which `retired` reports.
     """
-    prior = pass_evidence(state, last_recorded_pass(state))
     present, retired = validation_view(state)
-    # A retired check is one a human took out of the set; without this the set could only
-    # ever grow and `validate-drop` could not do what its message promises.
-    return sorted(c for c in prior if c not in present and c not in retired)
+    out = {}
+    for x in state["passes"]:
+        if x.get("result") is None or x.get("aborted"):
+            continue
+        # A retired check is one a human took out of the set; without this the set could
+        # only ever grow and `validate-drop` could not do what its message promises.
+        for c in pass_evidence(state, x):
+            if c not in present and c not in retired:
+                out[c] = x
+    return dict(sorted(out.items()))
+
+
+def describe_missing(missing):
+    return "; ".join(f"`{c}` (pass {x['n']})" for c, x in missing.items())
 
 
 def red_provenance(state, cmd):
@@ -670,8 +686,8 @@ def review_integrity(state, phrasing="loop"):
                                                   for v in never_ran))
     missing = missing_since_last_pass(state)
     if missing:
-        out.append(f"pass {lp['n']} rested on check(s) with no record on the current state: "
-                   + ", ".join(f"`{c}`" for c in missing))
+        out.append("check(s) a recorded pass rested on have no record on the current state: "
+                   + describe_missing(missing))
     if not lp["result"]["understood"]:
         out.append("reviewer did not demonstrate a credible understanding"
                    + ("" if area else " of the change"))
@@ -1155,8 +1171,12 @@ def pass_start_blockers(state, force=False):
         out.append(("never-ran", never_ran))
     if red and not never_ran and state.get("mode", "changes") != "project":
         out.append(("red", red))
+    # Not waived by `force`. That flag answers the pass limit and an unchanged scope — a
+    # human asking for one more look — and neither question is "may the evidence shrink".
+    # Waiving this here opened a pass on a weaker set with no retirement in the log; the one
+    # door out of the set is `validate-drop --force`, which records the decision.
     missing = missing_since_last_pass(state)
-    if missing and not force:
+    if missing:
         out.append(("missing", missing))
     return out
 
@@ -1195,15 +1215,15 @@ def cmd_pass_start(a):
                 "nothing: " + "; ".join(f"`{v['cmd']}` (exit {v['exit']})" for v in payload)
                 + " — fix the command and re-run it, or retract the record with `validate-drop`."
                 + (" Note that " + "; ".join(f"`{c}`" for c in carried)
-                   + " carried the last pass, so retiring it takes `validate-drop --force`, "
+                   + " carried a recorded pass, so retiring it takes `validate-drop --force`, "
                      "a human decision." if carried else ""))
         if key == "red":
             die("validation is red for the current state; fix it, or re-run the command if the failure was environmental "
                 "(if it never ran at all — typo, missing tool — retract it with `validate-drop`)")
         if key == "missing":
-            die(f"pass {lp['n']} rested on {len(payload)} check(s) not re-run since the change: "
-                + "; ".join(f"`{c}`" for c in payload)
-                + " — re-run them. Retiring one of these weakens the evidence this review rests on, "
+            die(f"recorded passes rested on {len(payload)} check(s) not re-run since the change: "
+                + describe_missing(payload)
+                + " — re-run them. `pass-start --force` does not waive this. Retiring one of these weakens the evidence this review rests on, "
                   "even if the tool that ran it is gone, so it needs `validate-drop --force` — "
                   "a human decision. (Plain `validate-drop` only clears a command that never ran "
                   "here and no pass rested on.)")
