@@ -49,6 +49,7 @@ import hashlib
 import json
 import os
 import shlex
+import stat
 import subprocess
 import sys
 import time
@@ -272,7 +273,7 @@ def scoped(paths):
 
 
 def scope_files(paths, untracked_only=False):
-    """`[(path, bytes | OSError)]`: every file git lists under `paths`, as read from disk.
+    """`[(path, bytes | OSError, kind)]`: every file git lists under `paths`, read from disk.
 
     The one list behind the fingerprint, emptiness and the unseen-path warning. Each asked
     git on its own, and git's index is not the disk: a tracked area deleted with `rm -rf` and
@@ -281,28 +282,38 @@ def scope_files(paths, untracked_only=False):
     a `chmod 000` file hashed as a marker and reached no gate at all. Reading each file once,
     here, makes "what is in scope" mean what a reviewer can actually open.
     Kept as bytes: a filename need not be decodable, and open() takes bytes paths.
+
+    `kind` is the part of an entry's state that is not its bytes, read without following
+    links: `b"link"` (the body is the link's target, as git stores it), `b"exec"`, or `b""`.
+    Content alone missed both. A review finding "the script is not executable" was fixed with
+    `chmod +x` and moved no hash, so `accept` called the fix absent and `pass-start` called the
+    state unchanged — a dead end; a link was hashed as whatever it pointed at.
     """
     flags = ["--others"] if untracked_only else ["--cached", "--others"]
     out = git("ls-files", "-z", *flags, "--exclude-standard", "--", *paths)
     files = []
     for p in sorted({p for p in out.split(b"\0") if p and outside_state_dir(p)}):
         try:
+            st = os.lstat(p)
+            if stat.S_ISLNK(st.st_mode):
+                files.append((p, os.readlink(p), b"link"))
+                continue
             with open(p, "rb") as f:
-                files.append((p, f.read()))
+                files.append((p, f.read(), b"exec" if st.st_mode & stat.S_IXUSR else b""))
         except OSError as e:
-            files.append((p, e))
+            files.append((p, e, b""))
     return files
 
 
 def readable(files):
-    return [p for p, body in files if not isinstance(body, OSError)]
+    return [p for p, body, _ in files if not isinstance(body, OSError)]
 
 
 def unreadable(files):
     """Files present on disk that cannot be read. A tracked file deleted on disk is simply
     absent from the state under review, and a directory entry is a submodule's gitlink —
     neither is something a reviewer was meant to open."""
-    return [p for p, body in files if isinstance(body, OSError)
+    return [p for p, body, _ in files if isinstance(body, OSError)
             and body.errno not in (errno.ENOENT, errno.EISDIR)]
 
 
@@ -328,8 +339,11 @@ def fingerprint(paths, mode="changes", base=None):
         h.update(str(len(b)).encode() + b"\0" + b)
 
     def files(listed):
-        for p, body in listed:
-            field(p)
+        for p, body, kind in listed:
+            # The kind rides in the path field after a NUL, which no path can contain: the
+            # framing stays unambiguous, and a plain file hashes exactly as it always did, so
+            # loops already in flight are not made stale by the format alone.
+            field(p + b"\0" + kind if kind else p)
             # Fold a failure in: an unreadable file must not hash like an empty one.
             field(f"<unreadable:{body.errno}>".encode() if isinstance(body, OSError) else body)
 

@@ -16,6 +16,7 @@ exit codes, fingerprints, ledger contents — never internals.
 import argparse
 import ast
 import contextlib
+import hashlib
 import importlib.util
 import io as _io
 import json
@@ -780,6 +781,60 @@ def state_dir_inside_scope_does_not_deadlock():
 
 
 # ---------------------------------------------------------------------------- fingerprint
+
+@case
+def a_mode_or_link_change_moves_the_fingerprint():
+    """The fingerprint hashed bytes only, and a file's state is more than its bytes.
+
+    A finding "this script is not executable" was fixed with `chmod +x`: no hash moved, so
+    `accept` said the recorded fix was absent and `pass-start` said nothing had changed — no
+    way forward. A symlink was hashed as its target's content, so retargeting it moved nothing.
+    """
+    def fixed_by_chmod(d):
+        run("validate", "--", "true", cwd=d)
+        run("pass-start", cwd=d, check=True)
+        run("pass-record", "--score", "8", "--findings", "1", "--understood",
+            "--test-evidence", "trusted", cwd=d, check=True)
+        os.chmod(os.path.join(d, "tool.sh"), 0o755)              # the fix
+        run("resolve", "--fixed", "1", cwd=d, check=True)
+        r = run("accept", cwd=d)
+        ok("recorded fixes are not present" not in r.stdout,
+           f"a chmod fix must be on the reviewed state's record: {r.stdout.strip()[:200]}")
+        run("validate", "--", "true", cwd=d)
+        r = run("pass-start", cwd=d)
+        ok(r.returncode == 0, f"and the next pass must open: {r.stderr.strip()[:200]}")
+
+    d = repo({"tool.sh": "#!/bin/sh\n", "pkg/a.py": "x\n"})          # project mode, tracked
+    run("project", "init", "--", "tool.sh", cwd=d, check=True)
+    run("project", "next", cwd=d, check=True)
+    fixed_by_chmod(d)
+
+    d = repo({"a.py": "1\n"})                                      # changes mode, untracked
+    write(d, "tool.sh", "#!/bin/sh\n")
+    run("init", "--", "tool.sh", cwd=d, check=True)
+    fixed_by_chmod(d)
+
+    m = module()
+    d = repo({"a.py": "1\n", "b.py": "1\n"})                        # same bytes, two targets
+    os.symlink("a.py", os.path.join(d, "link"))
+    cwd = os.getcwd()
+    os.chdir(d)
+    try:
+        before = m.fingerprint(["link"], "project")
+        os.remove("link")
+        os.symlink("b.py", "link")
+        ok(m.fingerprint(["link"], "project") != before, "retargeting a link must move the hash")
+
+        # A plain file hashes exactly as it did before kinds existed, so a loop in flight
+        # is not made stale by the format change alone.
+        h = hashlib.sha256()
+        for b in (b"a.py", b"1\n"):
+            h.update(str(len(b)).encode() + b"\0" + b)
+        ok(m.fingerprint(["a.py"], "project") == h.hexdigest()[:16],
+           "a plain file's hash must be unchanged by the new field")
+    finally:
+        os.chdir(cwd)
+
 
 @case
 def fingerprint_frames_path_and_content():
