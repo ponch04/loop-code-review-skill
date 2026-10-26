@@ -1357,6 +1357,102 @@ def an_inherited_check_cannot_be_retired_by_letting_it_fail_to_start():
 
 
 @case
+def an_inherited_check_cannot_be_retired_on_the_reviewed_state_either():
+    """The pass's evidence set is the same question whether or not the scope has moved.
+
+    It was computed only when the current fingerprint differed from the pass's. Standing on
+    the reviewed state — straight after `pass-record`, or after reverting a fix — the set
+    came out empty, so a check re-run there to exit 126 read as a typo nobody leaned on: a
+    plain `validate-drop` retracted the 126 *and* the green record the review was granted
+    on, and `accept` signed off on `{true}` where the pass had rested on `{suite, true}`.
+    """
+    d = repo({"src/a.py": "1\n"})
+    tool = os.path.join(d, "suite.sh")
+    write_text(tool, "#!/bin/sh\nexit 0\n")
+    os.chmod(tool, 0o755)
+    write(d, "src/a.py", "2\n")
+    run("init", "--", "src", cwd=d, check=True)
+    run("validate", "--", tool, cwd=d)
+    run("validate", "--", "true", cwd=d)
+    run("pass-start", cwd=d, check=True)
+    run("pass-record", "--score", "9", "--findings", "0", "--understood",
+        "--test-evidence", "trusted", cwd=d, check=True)
+
+    os.chmod(tool, 0o644)                             # same fingerprint; tool cannot start
+    run("validate", "--", tool, cwd=d)                # -> exit 126
+    r = run("validate-drop", "--", tool, cwd=d)
+    ok(r.returncode != 0 and "carried pass 1" in r.stderr and "--force" in r.stderr,
+       f"on the reviewed state an inherited check still needs --force: rc={r.returncode} "
+       f"{r.stderr.strip()[:160]}")
+    st = read_state(d)
+    ok(not any(v.get("retracted") for v in st["validation"] if v["cmd"] == tool),
+       "a refused drop must leave every record of the check in place")
+    r = run("accept", cwd=d)
+    ok(r.returncode != 0 and "validation red" in (r.stdout + r.stderr),
+       f"accept must still see the check fail to start: {(r.stdout + r.stderr).strip()[:160]}")
+
+    run("validate", "--", "pytset tests/", cwd=d)     # a typo after the pass, same state
+    r = run("validate-drop", "--", "pytset tests/", cwd=d)
+    ok(r.returncode == 0,
+       f"a record made after the pass opened is not what it rested on: {r.stderr.strip()[:160]}")
+
+
+@case
+def a_never_ran_drop_retracts_only_what_never_ran():
+    """The never-ran waiver covers the 126/127 record, not every record of the command.
+
+    The verdict reads the latest record; the cleanup marked them all. A check green earlier
+    on the same state lost that run to a plain `validate-drop` granted for a missing tool.
+    """
+    d = repo({"src/a.py": "1\n"})
+    tool = os.path.join(d, "extra.sh")
+    write_text(tool, "#!/bin/sh\nexit 0\n")
+    os.chmod(tool, 0o755)
+    write(d, "src/a.py", "2\n")
+    run("init", "--", "src", cwd=d, check=True)
+    run("validate", "--", tool, cwd=d)                # green, no pass rests on it
+    os.chmod(tool, 0o644)
+    run("validate", "--", tool, cwd=d)                # -> exit 126
+    r = run("validate-drop", "--", tool, cwd=d)
+    ok(r.returncode == 0 and "retracted 1 record" in r.stdout,
+       f"only the never-ran record may go: rc={r.returncode} {r.stdout.strip()[:160]}")
+    st = read_state(d)
+    kept = [v for v in st["validation"] if v["cmd"] == tool and not v.get("retracted")]
+    ok([v["exit"] for v in kept] == [0], f"the green run must survive: {kept}")
+
+
+@case
+def a_retirement_is_an_event_even_when_it_marks_records():
+    """`retired` is the command's latest event by list position, so a retirement has to be one.
+
+    Forcing a drop over records on the current state marked them in place and appended
+    nothing. A run of the same command on another fingerprint, made later and then reverted
+    away from, stayed the latest event: the check left the current state but never entered
+    `retired`, and `pass-start` kept demanding the check a human had just retired.
+    """
+    d = repo({"src/a.py": "1\n"})
+    write(d, "src/a.py", "2\n")
+    run("init", "--", "src", cwd=d, check=True)
+    run("validate", "--", "echo suite", cwd=d)
+    run("validate", "--", "echo lint", cwd=d)
+    run("pass-start", cwd=d, check=True)
+    run("pass-record", "--score", "7", "--findings", "1", "--understood",
+        "--test-evidence", "trusted", cwd=d, check=True)
+    write(d, "src/a.py", "3\n")                       # fix batch, state B
+    run("resolve", "--fixed", "1", cwd=d, check=True)
+    run("validate", "--", "echo suite", cwd=d)
+    run("validate", "--", "echo lint", cwd=d)
+    write(d, "src/a.py", "4\n")                       # state C: suite runs here last
+    run("validate", "--", "echo suite", cwd=d)
+    write(d, "src/a.py", "3\n")                       # back to B, then retire it here
+    run("validate-drop", "--force", "--reason", "suite folded into lint", "--", "echo suite",
+        cwd=d, check=True)
+    r = run("pass-start", cwd=d)
+    ok(r.returncode == 0,
+       f"a forced retirement must take the check out of the set: {r.stderr.strip()[:200]}")
+
+
+@case
 def a_fresh_typo_no_pass_rested_on_still_clears_without_force():
     """The other side of the same rule: the never-ran exemption must survive the fix, or a
     mistyped command would strand the loop it never contributed evidence to."""

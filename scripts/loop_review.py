@@ -476,6 +476,27 @@ def current_validation(state):
     return list(validation_at(state, state["fingerprint_current"]).values())
 
 
+def pass_evidence(state, lp):
+    """The commands pass `lp` rested on: usable runs on its fingerprint when it opened.
+
+    One answer for every gate that asks it. Each used to compute it inline, and only "when
+    the scope has moved since": standing on the reviewed fingerprint — right after
+    `pass-record`, or after reverting a fix — the set came out empty, so a check re-run there
+    to exit 126 read as a typo no pass leaned on, and a plain `validate-drop` retracted the
+    green record the review was granted on along with it. Records made *after* the pass
+    opened are not what it rested on, even on the same fingerprint: a typo typed later stays
+    a typo. A record retracted since then (a forced retirement) drops out by `is_evidence`.
+    """
+    if lp is None:
+        return {}
+    upto = lp.get("validation_upto", len(state["validation"]))
+    rested = {}
+    for v in state["validation"][:upto]:
+        if v["fingerprint"] == lp["fingerprint"] and is_evidence(v):
+            rested[v["cmd"]] = v
+    return evidence_set(rested)
+
+
 def missing_since_last_pass(state):
     """Commands the last pass rested on that have no record on the current state.
 
@@ -484,10 +505,7 @@ def missing_since_last_pass(state):
     commands present on the accepted fingerprint. So a later pass may not be granted on a
     weaker set than the pass before it (SKILL.md steps 2 and 5).
     """
-    lp = last_recorded_pass(state)
-    if lp is None or lp["fingerprint"] == state["fingerprint_current"]:
-        return []
-    prior = evidence_set(validation_at(state, lp["fingerprint"]))
+    prior = pass_evidence(state, last_recorded_pass(state))
     present, retired = validation_view(state)
     # A retired check is one a human took out of the set; without this the set could only
     # ever grow and `validate-drop` could not do what its message promises.
@@ -983,9 +1001,7 @@ def cmd_validate_drop(a):
     # never-ran branch, where a plain `validate-drop` retired it and `pass-start` accepted the
     # shrunken set. A check the review was granted on stays evidence even once the tool that
     # ran it is gone; what changed is the environment, and that is the human's call to weigh.
-    prior = (evidence_set(validation_at(state, lp["fingerprint"]))
-             if lp is not None and lp["fingerprint"] != state["fingerprint_current"] else {})
-    inherited = cmd in prior
+    inherited = cmd in pass_evidence(state, lp)
     _, retired = validation_view(state)
     if cmd in retired and not hits:
         # Already out of the set and still out — the retirement holds until the command is
@@ -1008,16 +1024,18 @@ def cmd_validate_drop(a):
                     "that evidence" if kind == "green" else
                     "re-run it, or retire it with --force (that weakens the evidence set)")
             die(f"`{cmd}` carried pass {lp['n']} and {why}; {tail}")
-        if hits:
-            for v in hits:
-                v["retracted"] = {"at": now(), "reason": a.reason or f"retired: inherited from pass {lp['n']}"}
-        else:
-            # No record here to mark, so the retirement is stamped as its own entry: history
-            # stays append-only and the decision belongs to the state where it was made.
-            state["validation"].append({
-                "cmd": cmd, "exit": None, "at": now(), "fingerprint": state["fingerprint_current"],
-                "retracted": {"at": now(), "reason": a.reason or f"retired: inherited from pass {lp['n']}, not re-run"},
-            })
+        for v in hits:
+            v["retracted"] = {"at": now(), "reason": a.reason or f"retired: inherited from pass {lp['n']}"}
+        # The retirement is always stamped as its own entry, records marked or not.
+        # `validation_view` reads a command's latest *event* by list position, and marking
+        # the records here in place is not one: a later run of the command on another
+        # fingerprint stayed the latest event, the check left the current state without
+        # entering `retired`, and `pass-start` went on demanding what was just retired.
+        state["validation"].append({
+            "cmd": cmd, "exit": None, "at": now(), "fingerprint": state["fingerprint_current"],
+            "retracted": {"at": now(), "reason": a.reason or (
+                f"retired: inherited from pass {lp['n']}" + ("" if hits else ", not re-run"))},
+        })
         save(state)
         print(f"retired `{cmd}` — inherited from pass {lp['n']}")
         print_validation(current_validation(state), state=state)
@@ -1028,6 +1046,11 @@ def cmd_validate_drop(a):
                   else "there is nothing here to retract")
         die(f"`{cmd}`: {why} — that is a result, not a mistake; {advice} "
             "(--force to retract anyway)")
+    if not a.force:
+        # Only what never ran is bookkeeping. The verdict above reads the latest record; the
+        # earlier ones on this state may be results — a green run before the tool vanished —
+        # and retracting every hit took them along under a waiver granted for a 127.
+        hits = [v for v in hits if is_declaration(v) or v["exit"] in NEVER_RAN]
     for v in hits:
         v["retracted"] = {"at": now(), "reason": a.reason or ("forced" if a.force else "never ran")}
     save(state)
@@ -1101,8 +1124,7 @@ def cmd_pass_start(a):
             # fail. Refuse in every mode. Two different exits, and naming the wrong one is
             # how the gate got walked around: a check the last pass rested on is still
             # evidence once its tool disappears, so retiring it needs `--force`.
-            prior = (evidence_set(validation_at(state, lp["fingerprint"]))
-                     if lp is not None and lp["fingerprint"] != state["fingerprint_current"] else {})
+            prior = pass_evidence(state, lp)
             carried = [v["cmd"] for v in payload if v["cmd"] in prior]
             die("these command(s) never ran (missing tool or typo), so they are evidence about "
                 "nothing: " + "; ".join(f"`{v['cmd']}` (exit {v['exit']})" for v in payload)
@@ -1138,7 +1160,10 @@ def cmd_pass_start(a):
         print("  in report-only write them into the findings file; in fix mode they still "
               "block `accept`, so fix them or close the area incomplete with them as the "
               "blocker", file=sys.stderr)
-    entry = {"n": n, "opened": now(), "fingerprint": state["fingerprint_current"], "result": None}
+    # How much of the validation history existed when the pass opened: what it rested on is
+    # bounded by this, not by whatever later lands on the same fingerprint (`pass_evidence`).
+    entry = {"n": n, "opened": now(), "fingerprint": state["fingerprint_current"], "result": None,
+             "validation_upto": len(state["validation"])}
     if red:
         entry["opened_over_red"] = [v["cmd"] for v in red]
         entry["red_provenance"] = {v["cmd"]: red_provenance(state, v["cmd"]) for v in red}
