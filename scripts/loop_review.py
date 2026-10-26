@@ -1135,14 +1135,21 @@ def cmd_validate_drop(a):
             print_validation(cur, "recorded on the current state", state, file=sys.stderr)
         sys.exit(1)
     if inherited:
-        # A check a pass rested on. `pass-start` only opens a pass on green
-        # validation, so anything in that set passed — retiring it weakens the evidence the
-        # review was granted on, and that is a human call, never the agent's.
+        # A check a pass rested on — green, or in project mode failing: `pass-start` opens a
+        # project pass over red and stamps it `opened_over_red`. Either way retiring it is a
+        # human call, never the agent's. A green one costs the review evidence it was granted
+        # on; a failing one is worse to lose quietly, because it takes a known failure out of
+        # what every later pass and `accept` must face. The message says which it is: reading
+        # the set as "everything here passed" was true only in task mode.
         if not a.force:
             kind, why = record_state(hits)
+            failing = cmd in (lp.get("opened_over_red") or [])
             tail = ("retiring it is still a human call (--force), and it costs the review "
                     "that evidence" if kind == "green" else
                     "re-run it, or retire it with --force (that weakens the evidence set)")
+            if failing:
+                tail += (f" — it was failing when pass {lp['n']} opened, so retiring it also "
+                         "hides that failure from every later gate")
             die(f"`{cmd}` carried pass {lp['n']} and {why}; {tail}")
         # The retirement is its own entry and touches no record. Marking the runs in place
         # was invisible to `validation_view`, which reads events by list position (a later
