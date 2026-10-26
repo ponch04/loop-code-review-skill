@@ -2739,6 +2739,61 @@ def stuck_states():
     run("validate", "--", "definitely-not-a-command", cwd=d)
     out.append(("pass-start, never-ran check", d, ("pass-start",),
                 run("pass-start", cwd=d).stderr))
+
+    # `project init` / `project next` with a state.json in every relation to the ledger. Both
+    # refused on the file's existence and named `project close`, which refuses unless an
+    # area is in progress and the loop is its own.
+    def queue(*extra):
+        d = repo({"a/f.py": "x\n", "b/g.py": "y\n"})
+        run("project", "init", *extra, "--", "a", "b", cwd=d, check=True)
+        return d
+
+    def close_first(d):
+        run("project", "next", cwd=d, check=True)
+        pass_through(d, "9.5", "0", "trusted")
+        findings(d, "a", "A. clean\n")
+        run("project", "close", cwd=d, check=True)
+
+    d = queue("--report-only")                                  # a loop `init` made between areas
+    close_first(d)
+    write(d, "b/g.py", "z\n")
+    run("init", "--", "b/g.py", cwd=d, check=True)
+    out.append(("project next, loop outside the queue", d, ("project", "next"),
+                run("project", "next", cwd=d).stderr))
+
+    d = queue()                                                 # foreign loop left by close --force
+    run("project", "next", cwd=d, check=True)
+    sf = os.path.join(d, ".loop-review", "state.json")
+    st = json.loads(read_text(sf))
+    st["area"] = st["scope"] = ["b"]
+    write_text(sf, json.dumps(st, indent=2))
+    run("project", "close", "--force", cwd=d, check=True)
+    out.append(("project next, foreign loop left behind", d, ("project", "next"),
+                run("project", "next", cwd=d).stderr))
+
+    d = queue()                                                 # a foreign loop, area in progress
+    run("project", "next", cwd=d, check=True)
+    sf = os.path.join(d, ".loop-review", "state.json")
+    st = json.loads(read_text(sf))
+    st["area"] = st["scope"] = ["b"]
+    write_text(sf, json.dumps(st, indent=2))
+    out.append(("project next, foreign loop mid-area", d, ("project", "next"),
+                run("project", "next", cwd=d).stderr))
+
+    for label, cmd in (("project next, own loop not closed", ("project", "next")),
+                       ("project init --force, own loop not closed",
+                        ("project", "init", "--force", "--", "a"))):
+        d = queue("--report-only")                              # the area's own loop, finished
+        run("project", "next", cwd=d, check=True)
+        pass_through(d, "9.5", "0", "trusted")
+        findings(d, "a", "A. clean\n")
+        out.append((label, d, cmd, run(*cmd, cwd=d).stderr))
+
+    d = repo({"a/f.py": "x\n"})                                 # a plain loop, no ledger at all
+    write(d, "a/f.py", "y\n")
+    run("init", "--", "a", cwd=d, check=True)
+    out.append(("project init, plain loop open", d, ("project", "init", "--", "a"),
+                run("project", "init", "--", "a", cwd=d).stderr))
     return out
 
 

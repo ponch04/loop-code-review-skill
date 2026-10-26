@@ -1772,6 +1772,35 @@ def load_project():
         die(f"{PROJECT_FILE} is not valid JSON ({e})")
 
 
+def open_loop_way_out(p):
+    """What frees an open `state.json` before the queue can move, or None if there is none.
+
+    `project init` and `project next` both refused on the file's mere existence and sent
+    the operator to `project close` — which is refused itself unless an area is in progress
+    and the loop is that area's: a loop left by `init` between areas, or a foreign one that
+    `project close --force` deliberately leaves behind, met `no area in progress` on the very
+    next command. The way out depends on whose loop it is, so it is decided here, once.
+    `p` is the ledger, or None when there is none.
+    """
+    if not os.path.exists(STATE_FILE):
+        return None
+    try:
+        loop = read_json(STATE_FILE)
+    except (OSError, ValueError):
+        loop = {}
+    cur = next((x for x in (p or {}).get("areas", []) if x["status"] == "in_progress"), None)
+    if cur is not None and loop_is_area(loop, cur):
+        return (f"area `{area_name(cur)}` is mid-loop — `project close` records its outcome "
+                "and frees the loop first")
+    if cur is not None:
+        return (f"the open loop (state.json) is not area `{area_name(cur)}`'s — `project close "
+                "--force` settles that area `incomplete` and leaves the loop alone; `reset` "
+                "then frees it")
+    return (f"a loop outside the project queue is open (state.json, scope "
+            f"{loop.get('scope')}) — `reset` frees it once it is finished or the user agrees "
+            "it is dead; no area owns it, so `project close` has nothing to record")
+
+
 def save_project(p):
     """Atomic, for the same reason as save(): the ledger is the whole project review."""
     write_json(PROJECT_FILE, p)
@@ -1913,8 +1942,14 @@ def cmd_project_init(a):
     os.chdir(root)
     if os.path.exists(PROJECT_FILE) and not a.force:
         die("project review already active; `project status` to continue it, or --force to start over")
-    if os.path.exists(STATE_FILE):
-        die("an area loop is still open (state.json); `project close` or `reset` it first")
+    # `--force` rebuilds the ledger; an open loop is still whatever it was under the old one.
+    try:
+        prior = read_json(PROJECT_FILE) if os.path.exists(PROJECT_FILE) else None
+    except (OSError, ValueError):
+        prior = None
+    blocked = open_loop_way_out(prior)
+    if blocked:
+        die(blocked)
     # Every area is checked here, before any of them is reviewed: a mistyped or renamed
     # path matches no file, and an area nobody can read still passes every gate and closes
     # as `accepted`. Checking at queue time reports all the bad paths at once, while the
@@ -1945,8 +1980,9 @@ def cmd_project_init(a):
 def cmd_project_next(a):
     os.chdir(repo_root())
     p = load_project()
-    if os.path.exists(STATE_FILE):
-        die("an area loop is still open; `project close` it before moving on")
+    blocked = open_loop_way_out(p)
+    if blocked:
+        die(blocked)
     cur = next((x for x in p["areas"] if x["status"] == "in_progress"), None)
     if cur:
         # `project close` alone cannot settle this: it is refused for exactly this state, a
