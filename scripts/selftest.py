@@ -1721,6 +1721,50 @@ def pass_start_force_never_waives_the_evidence_set():
 
 
 @case
+def what_a_pass_rested_on_is_what_it_opened_on():
+    """The evidence set is the pass's own record, not every run ever made on its state.
+
+    Read from the log by fingerprint, a typo or a diagnostic failing run made on the reviewed
+    state after the pass joined the set: after the next edit `pass-start` demanded it as
+    something pass 1 had rested on. And the set holds what a project pass was opened *over*
+    — red included — so it must never be described as "everything here passed".
+    """
+    d = repo({"src/a.py": "1\n"})
+    write(d, "src/a.py", "2\n")
+    run("init", "--", "src", cwd=d, check=True)
+    run("validate", "--", "true", cwd=d)
+    run("pass-start", cwd=d, check=True)
+    run("pass-record", "--score", "8", "--findings", "1", "--understood",
+        "--test-evidence", "trusted", cwd=d, check=True)
+    run("validate", "--", "pytset tests/", cwd=d)     # after the pass, on its state
+    run("validate", "--", "false", cwd=d)             # a diagnostic run that fails
+    write(d, "src/a.py", "3\n")
+    run("resolve", "--fixed", "1", cwd=d, check=True)
+    run("validate", "--", "true", cwd=d)
+    r = run("pass-start", cwd=d)
+    ok(r.returncode == 0,
+       f"runs made after pass 1 opened are not what it rested on: {r.stderr.strip()[:200]}")
+
+    d = repo({"pkg/a.py": "x\n"})
+    tool = os.path.join(d, "check.sh")
+    write_text(tool, "#!/bin/sh\nexit 1\n")
+    os.chmod(tool, 0o755)
+    run("project", "init", "--", "pkg", cwd=d, check=True)
+    run("project", "next", cwd=d, check=True)
+    run("validate", "--", tool, cwd=d)                # inherited red: the pass opens over it
+    run("pass-start", cwd=d, check=True)
+    run("pass-record", "--score", "6", "--findings", "0", "--understood",
+        "--test-evidence", "trusted", cwd=d, check=True)
+    os.chmod(tool, 0o644)
+    run("validate", "--", tool, cwd=d)                # -> exit 126
+    r = run("validate-drop", "--", tool, cwd=d)
+    ok(r.returncode != 0 and "carried pass 1" in r.stderr
+       and "failing when pass 1 opened" in r.stderr,
+       f"a check the pass was opened over stays in its set, and the refusal says it was "
+       f"failing: rc={r.returncode} {r.stderr.strip()[:240]}")
+
+
+@case
 def a_fresh_typo_no_pass_rested_on_still_clears_without_force():
     """The other side of the same rule: the never-ran exemption must survive the fix, or a
     mistyped command would strand the loop it never contributed evidence to."""
