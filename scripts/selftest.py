@@ -1201,6 +1201,7 @@ def every_command_that_echoes_the_loop_context_shows_both_fields():
     for cmd in (("status",), ("pass-start",)):
         out = run(*cmd, cwd=d, check=True).stdout
         ok(brief in out and note in out, f"{cmd[0]} must echo both: {out[:200]}")
+    run("pass-abort", "--reason", "brief changes only between passes", cwd=d, check=True)
     out = run("brief", "--force", "--scope-note", "narrowed to the parser", cwd=d, check=True).stdout
     ok(brief in out and "narrowed to the parser" in out, f"brief must echo both: {out[:200]}")
 
@@ -1341,6 +1342,49 @@ def none_and_a_command_are_refused_together_by_both_validate_commands():
 
 
 @case
+def new_terms_make_the_last_review_stale_and_never_land_mid_review():
+    """The brief and scope note are reviewed terms; the fingerprint covered only the code.
+
+    `brief` changed them while a reviewer was reading, and over a recorded clean pass it left
+    that pass "current": `accept` signed off on requirements no reviewer saw, and `pass-start`
+    refused the new pass as unchanged. Every command that changes what a review rests on is
+    refused while one is open, by one guard.
+    """
+    d = repo({"src/a.py": "1\n"})
+    write(d, "src/a.py", "2\n")
+    run("init", "--", "src", cwd=d, check=True)
+    run("validate", "--", "true", cwd=d)
+    run("pass-start", cwd=d, check=True)
+    for cmd in (("brief", "--task-brief", "a.py must end with v2"),
+                ("brief", "--force", "--scope-note", "only the parser"),
+                ("scope", "--", "other.py"),
+                ("validate-drop", "--", "true")):
+        r = run(*cmd, cwd=d)
+        ok(r.returncode != 0 and "pass 1 is open" in r.stderr,
+           f"`{' '.join(cmd)}` must wait for the open review: rc={r.returncode} "
+           f"{r.stderr.strip()[:160]}")
+    ok(read_state(d).get("task_brief") is None, "and the refused brief must not be recorded")
+    run("pass-record", "--score", "9.5", "--findings", "0", "--understood",
+        "--test-evidence", "trusted", cwd=d, check=True)
+    ok(run("accept", cwd=d).returncode == 0, "the fixture accepts on the terms it was given")
+
+    for flags in (("--task-brief", "a.py must end with v2"),                 # set for the first time
+                  ("--force", "--task-brief", "a.py must end with v3")):     # replaced
+        run("brief", *flags, cwd=d, check=True)
+        r = run("accept", cwd=d)
+        ok(r.returncode != 0 and "brief or scope note changed since pass" in r.stdout,
+           f"`brief {' '.join(flags)}`: a review given other terms must not be accepted: "
+           f"{r.stdout.strip()[:200]}")
+        r = run("pass-start", cwd=d)
+        ok(r.returncode == 0,
+           f"and the new pass on unchanged code must open: {r.stderr.strip()[:200]}")
+        run("pass-record", "--score", "9.5", "--findings", "0", "--understood",
+            "--test-evidence", "trusted", cwd=d, check=True)
+        r = run("accept", cwd=d)
+        ok(r.returncode == 0, f"a review on the new terms accepts: {r.stdout.strip()[:200]}")
+
+
+@case
 def a_mistaken_no_check_declaration_can_be_withdrawn_by_name():
     """`validate --none` writes a record under an internal marker, so retracting it needed one.
 
@@ -1439,12 +1483,12 @@ def a_retirement_holds_until_the_command_is_run_again():
 
     write(d, "src/a.py", "4\n")                           # one more edit before the pass
     run("validate", "--", "echo lint", cwd=d)
-    r = run("pass-start", cwd=d)
-    ok(r.returncode == 0,
-       f"an edit must not undo a retirement: {r.stderr.strip()[:200]}")
     r = run("validate-drop", "--force", "--", "echo suite", cwd=d)
     ok(r.returncode != 0 and "already retired" in r.stderr,
        f"re-forcing a standing decision must be refused as such: {r.stderr.strip()[:160]}")
+    r = run("pass-start", cwd=d)
+    ok(r.returncode == 0,
+       f"an edit must not undo a retirement: {r.stderr.strip()[:200]}")
 
     run("pass-record", "--score", "9", "--findings", "1", "--understood",
         "--test-evidence", "trusted", cwd=d, check=True)

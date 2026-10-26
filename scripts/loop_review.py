@@ -436,6 +436,35 @@ def open_pass(state):
     return lp if lp is not None and lp.get("result") is None and not lp.get("aborted") else None
 
 
+def refuse_if_open(state, verb, what):
+    """Refuse `verb` while a pass is open: it would change `what` under a review in flight.
+
+    One guard for every command that edits what a review rests on. They learned it one at a
+    time — `amend`, then `resolve` — and `brief` never did: a brief replaced while the
+    reviewer was reading made `pass-record` file that verdict as a review against terms it
+    was never given. The open pass is settled first, by recording or aborting it.
+    """
+    op = open_pass(state)
+    if op is not None:
+        die(f"pass {op['n']} is open — `pass-record` states its verdict, `pass-abort` "
+            f"discards it. `{verb}` changes {what}, which that review is reading.")
+
+
+def terms_of(state):
+    """Hash of the review's terms: the brief and the scope note, the two things besides the
+    code a reviewer is given. A pass stamps it at `pass-start`; the fingerprint covers only
+    the code, so terms changed after a pass left that pass "current" — `accept` signed off on
+    requirements no reviewer saw, and `pass-start` refused the new pass as unchanged."""
+    blob = json.dumps([state.get("task_brief"), state.get("scope_note")]).encode()
+    return hashlib.sha256(blob).hexdigest()[:16]
+
+
+def terms_moved(state, lp):
+    """True when `lp` was reviewed against other terms. Passes stamped before the field
+    existed carry no record of what they were given, and are not second-guessed."""
+    return "terms" in lp and lp["terms"] != terms_of(state)
+
+
 def last_recorded_pass(state):
     """The last pass that produced a reviewer result — what acceptance is judged on."""
     return next((x for x in reversed(state["passes"]) if x.get("result")), None)
@@ -707,6 +736,9 @@ def review_integrity(state, phrasing="loop"):
         out.append("the area moved since the pass; the review describes code that is no "
                    "longer there" if area else
                    "scoped changes moved since the last pass; review is stale")
+    if terms_moved(state, lp):
+        out.append(f"the brief or scope note changed since pass {lp['n']}, so that review "
+                   "was given other terms; open a new pass")
     # Condition 1's floor, asked of both modes. Report-only does not need the checks green —
     # an area is reviewed as it stands — but it needs them to *exist*: `validate-drop --none`
     # or a retracted record could leave the reviewed state with no validation at all, and a
@@ -1006,6 +1038,7 @@ def cmd_scope(a):
     added = [to_repo_relative(x, root) for x in a.paths]
     os.chdir(root)
     state = load()
+    refuse_if_open(state, "scope", "what is under review")
     new = [x for x in dict.fromkeys(added) if x not in state["scope"]]
     if not new:
         die("every path given is already in scope")
@@ -1132,6 +1165,7 @@ def cmd_validate_drop(a):
     """
     os.chdir(repo_root())
     state = load()
+    refuse_if_open(state, "validate-drop", "the validation that review was handed")
     check_none_or_command(a, "validate-drop",
                           "validate-drop needs a command after `--`, or --none to withdraw "
                           "a `validate --none` record")
@@ -1232,7 +1266,10 @@ def pass_start_blockers(state, force=False):
     lp = last_recorded_pass(state)
     if len(state["passes"]) + 1 > state["max_passes"] and not force:
         out.append(("limit", state["max_passes"]))
-    if lp and lp["fingerprint"] == state["fingerprint_current"] and not force:
+    # Unchanged means the code *and* the terms: a new brief is a new question about the
+    # same code, and refusing it as "unchanged" left the old review standing for both.
+    if (lp and lp["fingerprint"] == state["fingerprint_current"]
+            and not terms_moved(state, lp) and not force):
         out.append(("unchanged", lp))
     if not state.get("allow_empty") and scope_is_empty(state["scope"],
                                                        state.get("mode", "changes"),
@@ -1323,7 +1360,8 @@ def cmd_pass_start(a):
               "blocker", file=sys.stderr)
     # What the pass rested on, fixed now: later runs on this fingerprint and later
     # retirements must not rewrite it (`pass_evidence`).
-    entry = {"n": n, "opened": now(), "fingerprint": state["fingerprint_current"], "result": None,
+    entry = {"n": n, "opened": now(), "fingerprint": state["fingerprint_current"],
+             "terms": terms_of(state), "result": None,
              "rested_on": sorted(evidence_set(validation_at(state, state["fingerprint_current"])))}
     if red:
         entry["opened_over_red"] = [v["cmd"] for v in red]
@@ -1361,6 +1399,7 @@ def cmd_brief(a):
     note = (a.scope_note or "").strip() or None
     if not brief and not note:
         die("brief needs --task-brief TEXT, --task-brief-file PATH or --scope-note TEXT")
+    refuse_if_open(state, "brief", "the terms the reviewer was given")
     for field, value, label in (("task_brief", brief, "brief"), ("scope_note", note, "scope note")):
         if value is None:
             continue
@@ -1371,6 +1410,10 @@ def cmd_brief(a):
         state[field] = value
     save(state)
     print_loop_context(state)
+    lp = last_recorded_pass(state)
+    if lp is not None and terms_moved(state, lp):
+        print(f"note: pass {lp['n']} was reviewed against other terms and is now stale — "
+              "open a new pass so a reviewer sees these", file=sys.stderr)
 
 
 def cmd_pass_abort(a):
@@ -1458,10 +1501,7 @@ def require_recorded_pass(state, action, missing):
     resolution log onto the dead record — then advised opening a new pass, which was already
     open. One guard, so the next command that edits a recorded pass cannot forget.
     """
-    op = open_pass(state)
-    if op is not None:
-        die(f"pass {op['n']} is open — `pass-record` states its verdict, `pass-abort` "
-            f"discards it. `{action}` edits the last recorded pass, which that one supersedes.")
+    refuse_if_open(state, action, "the last recorded pass, which that one supersedes")
     lp = last_recorded_pass(state)
     if lp is None:
         die(missing)
