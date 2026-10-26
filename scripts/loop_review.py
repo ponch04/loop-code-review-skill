@@ -734,8 +734,12 @@ def resolution(r):
 def blockers(state):
     """Return list of reasons acceptance is not possible. Empty list == accepted."""
     reasons = review_integrity(state)
+    # Stop where `review_integrity` stops. With a newer pass open, the last recorded one is
+    # superseded: judging its findings, fixes and verdict reported blockers about a review
+    # no gate will read again, and each came with a recovery (`amend`, `resolve`) that
+    # `require_recorded_pass` refuses in exactly this state. The open pass is the blocker.
     lp = last_recorded_pass(state)
-    if lp is None or lp.get("result") is None:
+    if lp is None or open_pass(state) is not None:
         return reasons
     # Absent and never-ran validation are `review_integrity`'s; a check that ran and failed
     # is an acceptance matter — in report-only it is the area's state, to be reported.

@@ -2503,6 +2503,69 @@ def a_recommended_recovery_works_in_the_state_that_printed_it():
            f"{(r.stderr or r.stdout).strip()[:200]}")
 
 
+@case
+def every_command_an_acceptance_blocker_names_runs_in_that_state():
+    """A blocker's recovery is checked by running it where `accept` printed it.
+
+    `blockers()` went on judging the last recorded pass after a newer one was opened, and
+    its reasons carried recoveries — `amend --test-evidence`, `resolve` — that
+    `require_recorded_pass` refuses while a pass is open. Parsing them proved only that the
+    flags exist. Each state below is built, `accept` is asked, and every command its reasons
+    name is run in a fresh copy of that state; a gate refusing it is a dead end.
+    """
+    def loop(findings="0", evidence=("--test-evidence", "trusted")):
+        d = repo()
+        write(d, "a.py", "v2\n")
+        run("init", "--", "a.py", cwd=d, check=True)
+        run("validate", "--", "true", cwd=d)
+        run("pass-start", cwd=d, check=True)
+        run("pass-record", "--score", "8", "--findings", findings, "--understood",
+            *evidence, cwd=d, check=True)
+        return d
+
+    states = []
+    d = loop(evidence=())                                       # verdict missing
+    states.append(("no test-evidence verdict", d))
+    d = loop("1")                                                # "fixed" with no edit
+    run("resolve", "--fixed", "1", cwd=d, check=True)
+    states.append(("fix recorded on the reviewed state", d))
+    d = loop("1", ())                                            # pass 1 superseded by pass 2
+    run("resolve", "--fixed", "1", cwd=d, check=True)
+    run("pass-start", "--force", cwd=d, check=True)
+    states.append(("a newer pass open", d))
+    superseded = d
+
+    fill = {"--test-evidence": "trusted", "--reason": "selftest"}
+    seen = 0
+    for label, d in states:
+        out = run("accept", cwd=d)
+        ok(out.returncode != 0, f"{label}: the fixture must be refused")
+        for named in [c for line in out.stdout.splitlines() for c in command_hits(line)]:
+            tokens = shlex.split(named)
+            tokens = [fill.get(tokens[i - 1], t) if t in ("...", "ARG") else t
+                      for i, t in enumerate(tokens)]
+            # `command_hits` strips a trailing `...` with the punctuation, leaving the flag
+            # bare; argparse would then exit 2 and the dead end would pass as "needs an
+            # argument". Give the flag its value so the gate is what answers.
+            if tokens[-1] in fill:
+                tokens.append(fill[tokens[-1]])
+            copy = tempfile.mkdtemp(prefix="loop-selftest-")
+            REPOS.append(copy)
+            shutil.copytree(d, copy, dirs_exist_ok=True)
+            r = run(*tokens, cwd=copy)
+            seen += 1
+            missing_arg = r.returncode == 2 or " needs " in r.stderr.split("\n")[0]
+            ok(r.returncode == 0 or missing_arg,
+               f"{label}: accept names `{named}` but this state refuses it: "
+               f"{(r.stderr or r.stdout).strip()[:200]}")
+    ok(seen >= 2, f"the fixtures must name recoveries to run, found {seen}")
+
+    out = run("accept", cwd=superseded).stdout
+    ok("pass 2 opened" in out and "pass 1" not in out and "unresolved" not in out
+       and "recorded fixes" not in out,
+       f"with pass 2 open, pass 1 is no longer what accept judges: {out.strip()[:300]}")
+
+
 def docstring_signatures():
     """The module docstring's `Commands:` block, as `{command: its whole entry}`.
 
