@@ -643,6 +643,14 @@ def review_integrity(state, phrasing="loop"):
     if not lp["result"]["understood"]:
         out.append("reviewer did not demonstrate a credible understanding"
                    + ("" if area else " of the change"))
+    # A required part of the reviewer's output in both modes (SKILL.md step 3, section C of
+    # the area prompt), so it lives here and not in `blockers()`: there, report-only `project
+    # close` never asked it, and an area whose reviewer gave no verdict closed `reviewed`
+    # with `test_evidence: null`. What the verdict *says* — `inadequate` — stays an
+    # acceptance matter: in report-only it is a finding to report, not a missing review.
+    if lp["result"].get("test_evidence") is None:
+        out.append(f"test evidence not assessed for pass {lp['n']} "
+                   "(record it with `amend --test-evidence ...`)")
     return out
 
 
@@ -674,10 +682,8 @@ def blockers(state):
             reasons.append("the scope is on the state the review found defective — the "
                            "recorded fixes are not present (never made, reverted, stashed, "
                            "checked out, or landed outside the scope: widen it with `scope --`)")
-    evidence = lp["result"].get("test_evidence")
-    if evidence is None:
-        reasons.append(f"test evidence not assessed for pass {lp['n']} (record it with `amend --test-evidence ...`)")
-    elif evidence == TEST_EVIDENCE_BLOCKING:
+    # "Not assessed" is `review_integrity`'s; only the verdict's content gates acceptance.
+    if lp["result"].get("test_evidence") == TEST_EVIDENCE_BLOCKING:
         reasons.append("test evidence for the changed behaviour is inadequate and its absence is not justified")
     return reasons
 
@@ -1953,8 +1959,13 @@ def cmd_project_status(a):
           + f", {p['max_passes']} passes/area — " + ", ".join(f"{k} {v}" for k, v in counts.items()))
     for x in p["areas"]:
         line = f"  [{x['status']:<11}] {area_name(x)}"
-        if x.get("test_evidence"):
-            line += f"  test-evidence {x['test_evidence']}"
+        # A row that recorded a review — closed with a findings count — owes the report both
+        # fields SKILL.md names per area, verdict and findings-file path, even when absent.
+        # Printing the verdict only when set hid exactly the rows where it was missing, and
+        # the path was never printed. A row with no review has neither, and says nothing.
+        reviewed = x["status"] not in ("pending", "in_progress") and x.get("findings") is not None
+        if x.get("test_evidence") or reviewed:
+            line += f"  test-evidence {metric(x.get('test_evidence'), 'not assessed')}"
         # Each metric prints only if the area has one. They are not filled as a block: an
         # area closed before any pass — an empty or renamed one, settled `incomplete` by
         # `project next` — has `passes: 0` and nothing else, and printing the group on the
@@ -1966,6 +1977,8 @@ def cmd_project_status(a):
             line += f"  findings {metric(resolved, '?')}/{x['findings']}"
         if x.get("score") is not None:
             line += f"  score {x['score']}"
+        if x.get("findings_file") or reviewed:
+            line += f"  findings-file {metric(x.get('findings_file'), 'not written')}"
         if x.get("blockers"):
             line += "  — " + "; ".join(x["blockers"])
         print(line)
