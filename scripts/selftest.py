@@ -352,6 +352,62 @@ def init_refuses_over_an_area_whose_loop_state_is_gone():
 
 
 @case
+def an_area_is_what_can_be_read_from_disk_not_what_git_lists():
+    """Emptiness asked git's index, and the index is not the disk.
+
+    The workflow never runs `git rm`, so an area deleted with `rm -rf` stayed listed: it
+    queued, opened a loop over nothing and closed `accepted`. A `chmod 000` file was hashed
+    as a marker and reached no gate, so an area closed `reviewed` with a file nobody opened.
+    """
+    def rm_area(d):
+        shutil.rmtree(os.path.join(d, "pkg"))                      # no `git rm`
+
+    d = repo({"pkg/a.py": "x\n", "lib/b.py": "y\n"})
+    rm_area(d)
+    r = run("project", "init", "--", "pkg", "lib", cwd=d)
+    ok(r.returncode == 2 and "match no file" in r.stderr and "pkg" in r.stderr,
+       f"an area deleted on disk must be refused at queue time: rc={r.returncode} "
+       f"{r.stderr.strip()[:200]}")
+
+    d = repo({"pkg/a.py": "x\n", "lib/b.py": "y\n"})
+    run("project", "init", "--", "pkg", "lib", cwd=d, check=True)
+    rm_area(d)                                                     # deleted after queueing
+    r = run("project", "next", cwd=d)
+    row = read_state(d, "project.json")["areas"][0]
+    ok(r.returncode == 2 and row["status"] == "incomplete",
+       f"project next must settle it, not open a loop: rc={r.returncode} {row['status']}")
+
+    d = repo({"pkg/a.py": "x\n"})
+    run("project", "init", "--", "pkg", cwd=d, check=True)
+    run("project", "next", cwd=d, check=True)
+    pass_through(d, "9.5", "0", "trusted")
+    findings(d, "pkg", "A. clean\n")
+    rm_area(d)                                                     # deleted after the pass
+    run("project", "close", cwd=d, check=True)
+    row = read_state(d, "project.json")["areas"][0]
+    ok(row["status"] == "incomplete" and any("files are gone" in b for b in row["blockers"]),
+       f"an area gone from disk after its pass describes nothing: {row}")
+
+    if os.geteuid() == 0:                                          # root reads anything
+        return
+    d = repo({"pkg/a.py": "x\n", "pkg/secret.py": "s\n"})
+    run("project", "init", "--report-only", "--", "pkg", cwd=d, check=True)
+    run("project", "next", cwd=d, check=True)
+    locked = os.path.join(d, "pkg", "secret.py")
+    os.chmod(locked, 0)
+    try:
+        pass_through(d, "9.5", "0", "trusted")
+        findings(d, "pkg", "A. clean\n")
+        run("project", "close", cwd=d, check=True)
+        row = read_state(d, "project.json")["areas"][0]
+        ok(row["status"] == "incomplete"
+           and any("unreadable" in b and "secret.py" in b for b in row["blockers"]),
+           f"a file no reviewer could open must keep the area from closing reviewed: {row}")
+    finally:
+        os.chmod(locked, 0o644)
+
+
+@case
 def a_refused_area_does_not_block_the_areas_behind_it():
     """One renamed directory must not make every later area unreachable."""
     d = repo({"a/x.py": "1\n", "gone/y.py": "2\n", "c/z.py": "3\n"})

@@ -44,6 +44,7 @@ Commands:
   reset [--project]                        delete the loop state (and the project ledger)
 """
 import argparse
+import errno
 import hashlib
 import json
 import os
@@ -270,6 +271,41 @@ def scoped(paths):
     return [*paths, f":(exclude,glob){STATE_DIR}/**", f":(exclude){STATE_DIR}"]
 
 
+def scope_files(paths, untracked_only=False):
+    """`[(path, bytes | OSError)]`: every file git lists under `paths`, as read from disk.
+
+    The one list behind the fingerprint, emptiness and the unseen-path warning. Each asked
+    git on its own, and git's index is not the disk: a tracked area deleted with `rm -rf` and
+    no `git rm` — the workflow never runs one — was still listed, so `scope_is_empty` called
+    it non-empty, `project next` opened a loop over nothing, and the area closed `accepted`;
+    a `chmod 000` file hashed as a marker and reached no gate at all. Reading each file once,
+    here, makes "what is in scope" mean what a reviewer can actually open.
+    Kept as bytes: a filename need not be decodable, and open() takes bytes paths.
+    """
+    flags = ["--others"] if untracked_only else ["--cached", "--others"]
+    out = git("ls-files", "-z", *flags, "--exclude-standard", "--", *paths)
+    files = []
+    for p in sorted({p for p in out.split(b"\0") if p and outside_state_dir(p)}):
+        try:
+            with open(p, "rb") as f:
+                files.append((p, f.read()))
+        except OSError as e:
+            files.append((p, e))
+    return files
+
+
+def readable(files):
+    return [p for p, body in files if not isinstance(body, OSError)]
+
+
+def unreadable(files):
+    """Files present on disk that cannot be read. A tracked file deleted on disk is simply
+    absent from the state under review, and a directory entry is a submodule's gitlink —
+    neither is something a reviewer was meant to open."""
+    return [p for p, body in files if isinstance(body, OSError)
+            and body.errno not in (errno.ENOENT, errno.EISDIR)]
+
+
 def fingerprint(paths, mode="changes", base=None):
     """Hash identifying the reviewed state, scoped to paths.
 
@@ -291,15 +327,14 @@ def fingerprint(paths, mode="changes", base=None):
         """
         h.update(str(len(b)).encode() + b"\0" + b)
 
-    if mode == "project":
-        out = git("ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", *paths)
-        for p in sorted({p for p in out.split(b"\0") if p and outside_state_dir(p)}):
+    def files(listed):
+        for p, body in listed:
             field(p)
-            try:
-                with open(p, "rb") as f:
-                    field(f.read())
-            except OSError as e:
-                field(f"<unreadable:{e.errno}>".encode())
+            # Fold a failure in: an unreadable file must not hash like an empty one.
+            field(f"<unreadable:{body.errno}>".encode() if isinstance(body, OSError) else body)
+
+    if mode == "project":
+        files(scope_files(paths))
         return h.hexdigest()[:16]
     # check=True on both git calls: a failure here must be loud. A silently empty hash is
     # indistinguishable from "nothing changed", which is the one lie that breaks every gate.
@@ -307,17 +342,7 @@ def fingerprint(paths, mode="changes", base=None):
     # -z: NUL-separated and unquoted, so paths with spaces, newlines or non-ASCII
     # characters survive intact. Splitting plain `ls-files` output would corrupt them
     # and silently drop those files from the hash.
-    out = git("ls-files", "-z", "--others", "--exclude-standard", "--", *paths)
-    # Kept as bytes: a filename need not be decodable, and open() takes bytes paths.
-    untracked = [p for p in out.split(b"\0") if p and outside_state_dir(p)]
-    for p in sorted(untracked):
-        field(p)
-        try:
-            with open(p, "rb") as f:
-                field(f.read())
-        except OSError as e:
-            # Fold the failure in: an unreadable file must not hash like an empty one.
-            field(f"<unreadable:{e.errno}>".encode())
+    files(scope_files(paths, untracked_only=True))
     return h.hexdigest()[:16]
 
 
@@ -337,7 +362,8 @@ def unseen_paths(paths):
 
     out = []
     for p in paths:
-        if [x for x in entries(p, True) if outside_state_dir(x)]:
+        listed = scope_files([p])
+        if readable(listed):
             continue                                   # the fingerprint can see it
         # Why it is invisible decides what the operator should do about it, so the reasons
         # are told apart rather than guessed from `os.path.exists`. Calling an empty
@@ -345,7 +371,12 @@ def unseen_paths(paths):
         # when the real answer is that there is nothing in it yet.
         everything = entries(p, False)
         if not os.path.exists(p):
-            why = "does not exist"
+            why = ("does not exist on disk (git still lists it — deleted without `git rm`)"
+                   if listed else "does not exist")
+        elif unreadable(listed):
+            why = "cannot be read — no reviewer can open what is in it"
+        elif listed:
+            why = "holds only files deleted on disk that git still lists"
         elif not everything:
             why = ("is an empty directory" if os.path.isdir(p)
                    else "holds nothing git can see")
@@ -376,19 +407,15 @@ def scope_is_empty(paths, mode="changes", base=None):
     which is byte-identical to the scoped one whenever the scope is the only thing changed.
 
     `changes`: empty when the diff against the base has no bytes and no untracked file
-    falls inside the scope. `project`: empty when the paths match no file at all — a
-    mistyped or renamed area, which would otherwise be queued, reviewed by nobody and
-    closed as accepted.
+    falls inside the scope. `project`: empty when the paths hold no file that can be read
+    from disk — a mistyped or renamed area, one deleted without `git rm`, or one nobody may
+    open, which would otherwise be queued, reviewed by nobody and closed as accepted.
     """
-    def listed(*flags):
-        out = git("ls-files", "-z", *flags, "--exclude-standard", "--", *paths)
-        return [p for p in out.split(b"\0") if p and outside_state_dir(p)]
-
     if mode == "project":
-        return not listed("--cached", "--others")
+        return not readable(scope_files(paths))
     if git("diff", base or diff_base(), "--", *scoped(paths)).strip():
         return False
-    return not listed("--others")
+    return not readable(scope_files(paths, untracked_only=True))
 
 
 def fp_of(state):
@@ -660,6 +687,13 @@ def review_integrity(state, phrasing="loop"):
         out.append("the area's files are gone; the review describes nothing" if area else
                    "the scope is empty now — nothing is under review "
                    "(reverted, stashed, committed, or the area's files are gone)")
+    # A file in scope nobody may open was never reviewed, whatever the rest of the area
+    # holds. The fingerprint folds it in as a marker so it cannot hash like an empty file;
+    # this is where it stops being silent.
+    locked = unreadable(scope_files(state["scope"], untracked_only=state.get("mode", "changes") != "project"))
+    if locked:
+        out.append("unreadable file(s) in scope, which no reviewer could open: "
+                   + ", ".join(os.fsdecode(p) for p in locked))
     op = open_pass(state)
     if op:
         out.append(f"pass {op['n']} opened but neither recorded nor aborted" if area else
@@ -1879,7 +1913,8 @@ def cmd_project_next(a):
         # remaining area unreachable — the opposite of "never stop the project on one stuck
         # area", and unrecoverable except by rebuilding the ledger and losing the outcomes
         # already earned.
-        settle_area(nxt, ["area matches no file — path renamed, deleted or mistyped"], passes=0)
+        settle_area(nxt, ["area matches no file — path renamed, deleted (on disk or in git), "
+                          "mistyped, or unreadable"], passes=0)
         save_project(p)
         left = sum(1 for x in p["areas"] if x["status"] == "pending")
         print(f"area `{area_name(nxt)}` matches no file — recorded incomplete; "
