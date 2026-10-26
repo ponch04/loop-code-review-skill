@@ -490,7 +490,8 @@ def is_declaration(v):
     with real tests *grows* the evidence, and `pass-start` refused it as shrinkage, demanding
     the declaration be re-run or retired with a `--force` the agent may not use.
     """
-    return v.get("cmd") == NO_CHECK
+    # A run can never hold this key now; a record that does and failed was one, from before.
+    return v.get("cmd") == NO_CHECK and v.get("exit") == 0
 
 
 def is_retirement(v):
@@ -1073,6 +1074,17 @@ def check_none_or_command(a, verb, empty_hint, reason_needs_none=False):
             "no executable check applies, a command names one to run")
     if not a.none and not a.command:
         die(empty_hint)
+    # The command itself is input too. `validate -- ""` (or only blanks) ran an empty shell
+    # line, exited 0 and was recorded GREEN — condition 1 met by running nothing. And the
+    # declaration's internal key, typed as a command, was recorded under that key: read as a
+    # declaration by every gate, and retracted along with the real one by `--none`.
+    if a.command and not any(p.strip() for p in a.command):
+        die(f"{verb}: the command after `--` is empty — name the check to run, or use "
+            "`--none --reason ...` when none applies")
+    if a.command and join_cmd(a.command) == NO_CHECK:
+        die(f"{verb}: `{NO_CHECK}` is the declaration's record, not a command — use `--none`")
+    if a.reason is not None and not a.reason.strip():
+        die(f"{verb} --reason is blank: say why, in words")
     if reason_needs_none and a.reason and not a.none:
         die(f"{verb} --reason belongs to `--none`: it is what the reviewer is told in place "
             "of a check. A command's record carries its exit code, not a reason")
@@ -1097,9 +1109,9 @@ def cmd_validate(a):
         state["fingerprint_current"] = fp_of(state)
         state["validation"].append({"cmd": NO_CHECK, "exit": 0, "at": now(),
                                     "fingerprint": state["fingerprint_current"],
-                                    "reason": a.reason})
+                                    "reason": a.reason.strip()})
         save(state)
-        print(f"recorded: no executable check applies — {a.reason}")
+        print(f"recorded: no executable check applies — {a.reason.strip()}")
         print("tell the reviewer exactly this in the validation section of its prompt; "
               "do not present it as a check that passed")
         return
@@ -1197,7 +1209,9 @@ def cmd_validate_drop(a):
         # decision that was never undone.
         die(f"`{cmd}` is already retired; it stays out of the set until it is run again")
     if not hits and not inherited:
-        print(f"loop-review: no validation record for `{cmd}` at the current state", file=sys.stderr)
+        # Named as the operator typed it: the declaration's record key is internal.
+        what = "`validate --none` declaration" if a.none else f"validation record for `{cmd}`"
+        print(f"loop-review: no {what} at the current state", file=sys.stderr)
         cur = current_validation(state)
         if cur:
             print_validation(cur, "recorded on the current state", state, file=sys.stderr)

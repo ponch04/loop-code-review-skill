@@ -2012,6 +2012,41 @@ def amend_may_not_lower_findings():
 # ------------------------------------------------------------------------- argument types
 
 @case
+def a_validation_command_is_checked_before_it_runs():
+    """The command after `--` is input like any flag, and it was taken on trust.
+
+    `validate -- ""` ran an empty shell line, exited 0 and was recorded GREEN — exit
+    condition 1 met by running nothing. The declaration's key typed as a command was stored
+    under that key, and `validate-drop --none` retracted it together with the real
+    declaration; a blank `--reason` was recorded as the sentence the reviewer is given.
+    """
+    d = repo()
+    write(d, "a.py", "v2\n")
+    run("init", "--", "a.py", cwd=d, check=True)
+    nocheck = module().NO_CHECK
+    for args, why in ((("validate", "--", ""), "is empty"),
+                      (("validate", "--", "   ", ""), "is empty"),
+                      (("validate", "--", nocheck), "not a command"),
+                      (("validate", "--none", "--reason", "   "), "is blank"),
+                      (("validate-drop", "--", " "), "is empty"),
+                      (("validate-drop", "--", nocheck), "not a command")):
+        r = run(*args, cwd=d)
+        ok(r.returncode != 0 and why in r.stderr,
+           f"`{' '.join(map(repr, args))}` must be refused ({why}): rc={r.returncode} "
+           f"{(r.stderr or r.stdout).strip()[:160]}")
+    ok(not read_state(d)["validation"], "and none of them may leave a record")
+
+    run("validate", "--none", "--reason", "  prose only  ", cwd=d, check=True)
+    ok(read_state(d)["validation"][-1]["reason"] == "prose only",
+       "the reason is recorded as words, not padding")
+    run("validate-drop", "--none", cwd=d, check=True)
+    r = run("validate-drop", "--none", cwd=d)
+    ok(r.returncode != 0 and "no `validate --none` declaration" in r.stderr
+       and nocheck not in r.stderr and "retired" not in r.stderr,
+       f"a second withdrawal says what is missing, in the operator's terms: {r.stderr.strip()[:160]}")
+
+
+@case
 def argument_values_are_validated():
     d = repo()
     write(d, "a.py", "v2\n")
