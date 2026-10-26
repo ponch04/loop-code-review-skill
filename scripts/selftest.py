@@ -1420,6 +1420,22 @@ def a_never_ran_drop_retracts_only_what_never_ran():
     kept = [v for v in st["validation"] if v["cmd"] == tool and not v.get("retracted")]
     ok([v["exit"] for v in kept] == [0], f"the green run must survive: {kept}")
 
+    # Correcting a record is not retiring the check. The retracted 126 was the command's
+    # last entry, so `retired` read it as a retirement: the green run carried pass 1, and
+    # the next pass opened without it and without --force.
+    os.chmod(tool, 0o755)
+    run("validate", "--", "true", cwd=d)
+    run("pass-start", cwd=d, check=True)
+    run("pass-record", "--score", "7", "--findings", "1", "--understood",
+        "--test-evidence", "trusted", cwd=d, check=True)
+    write(d, "src/a.py", "3\n")
+    run("resolve", "--fixed", "1", cwd=d, check=True)
+    run("validate", "--", "true", cwd=d)
+    r = run("pass-start", cwd=d)
+    ok(r.returncode != 0 and "not re-run since the change" in r.stderr and tool in r.stderr,
+       f"a corrected typo must not retire the check pass 1 rested on: rc={r.returncode} "
+       f"{r.stderr.strip()[:200]}")
+
 
 @case
 def a_retirement_is_an_event_even_when_it_marks_records():
@@ -1450,6 +1466,51 @@ def a_retirement_is_an_event_even_when_it_marks_records():
     r = run("pass-start", cwd=d)
     ok(r.returncode == 0,
        f"a forced retirement must take the check out of the set: {r.stderr.strip()[:200]}")
+    run("pass-abort", "--reason", "probe", cwd=d, check=True)
+
+    # The retirement supersedes the run on C too: returning there must not bring it back.
+    st = read_state(d)
+    fp_c = [v for v in st["validation"] if v["cmd"] == "echo suite"][-2]["fingerprint"]
+    at_c, retired = module().validation_view(st, fp_c)
+    ok("echo suite" not in at_c and "echo suite" in retired,
+       f"a retired check must not count on any state: at C {sorted(at_c)}, retired {sorted(retired)}")
+
+
+@case
+def a_retirement_never_rewrites_what_the_pass_rested_on():
+    """What a pass rested on is a fact about the pass; a later retirement cannot edit it.
+
+    Retiring on the reviewed fingerprint marked the pass's own green record retracted, and
+    the set was read back from those records. Run the check again — which ends the
+    retirement — and it was in the set of no pass: edit the files and it was demanded by
+    nothing; let it fail to start and a plain `validate-drop` retired it once more.
+    """
+    d = repo({"src/a.py": "1\n"})
+    tool = os.path.join(d, "suite.sh")
+    write_text(tool, "#!/bin/sh\nexit 0\n")
+    os.chmod(tool, 0o755)
+    write(d, "src/a.py", "2\n")
+    run("init", "--", "src", cwd=d, check=True)
+    run("validate", "--", tool, cwd=d)
+    run("validate", "--", "true", cwd=d)
+    run("pass-start", cwd=d, check=True)
+    run("pass-record", "--score", "7", "--findings", "1", "--understood",
+        "--test-evidence", "trusted", cwd=d, check=True)
+    run("validate-drop", "--force", "--", tool, cwd=d, check=True)   # on the reviewed state
+    run("validate", "--", tool, cwd=d)                                # run again: back in
+    write(d, "src/a.py", "3\n")
+    run("resolve", "--fixed", "1", cwd=d, check=True)
+    run("validate", "--", "true", cwd=d)
+    r = run("pass-start", cwd=d)
+    ok(r.returncode != 0 and "not re-run since the change" in r.stderr and tool in r.stderr,
+       f"a check run again after its retirement is demanded again: {r.stderr.strip()[:200]}")
+
+    os.chmod(tool, 0o644)
+    run("validate", "--", tool, cwd=d)                                # -> exit 126
+    r = run("validate-drop", "--", tool, cwd=d)
+    ok(r.returncode != 0 and "carried pass 1" in r.stderr,
+       f"it is still the pass's evidence, so dropping it needs --force: rc={r.returncode} "
+       f"{r.stderr.strip()[:160]}")
 
 
 @case

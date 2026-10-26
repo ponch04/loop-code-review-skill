@@ -437,6 +437,17 @@ def is_declaration(v):
     return v.get("cmd") == NO_CHECK
 
 
+def is_retirement(v):
+    """True for a `validate-drop --force` retirement: an event in the log, not a run.
+
+    It is appended, never stamped onto the records it supersedes, and it carries `retracted`
+    so that no reader of runs can mistake it for one. Correcting a record — a typo, a missing
+    tool, a mistaken declaration — marks that record retracted in place and is *not* a
+    retirement: it says the run never happened, not that the check left the set.
+    """
+    return v.get("exit") is None and bool(v.get("retracted"))
+
+
 def evidence_set(records):
     """The commands of `records` that a later pass must carry: real runs, never declarations."""
     return {c: v for c, v in records.items() if not is_declaration(v)}
@@ -450,7 +461,7 @@ def validation_view(state, fp=None):
     a flaky or environment failure clears by re-running — not only by editing — and distinct
     commands stay separate: a green re-run of the tests does not absolve a red lint.
 
-    `retired` holds the commands whose most recent event in the whole loop is a retirement.
+    `retired` holds the commands whose last retirement event has not been followed by a run.
     That is deliberately *not* scoped to a fingerprint: retiring a check is a decision about
     the check, made once by a human with `validate-drop --force`, and it holds until the
     command is run again. Keyed by fingerprint instead, the decision evaporated at the next
@@ -458,14 +469,22 @@ def validation_view(state, fp=None):
     into a routine keystroke, which is exactly how an escape hatch stops meaning anything.
     """
     fp = state["fingerprint_current"] if fp is None else fp
-    at_fp, last_event = {}, {}
+    at_fp, retired = {}, set()
     for v in state["validation"]:
         # Append-only, so list order is chronological: a later run of a command supersedes
-        # its retirement, and a retirement supersedes the run it was stamped on.
-        last_event[v["cmd"]] = v
+        # its retirement, and a retirement supersedes every earlier run of it — on any
+        # fingerprint, or returning to a state where it once ran would bring it back.
+        if is_retirement(v):
+            at_fp.pop(v["cmd"], None)
+            retired.add(v["cmd"])
+            continue
+        if v.get("retracted"):
+            # A corrected record never happened: it neither retires nor un-retires anything.
+            continue
+        retired.discard(v["cmd"])
         if v["fingerprint"] == fp and is_evidence(v):
             at_fp[v["cmd"]] = v
-    return at_fp, {c for c, v in last_event.items() if v.get("retracted")}
+    return at_fp, retired
 
 
 def validation_at(state, fp):
@@ -477,24 +496,22 @@ def current_validation(state):
 
 
 def pass_evidence(state, lp):
-    """The commands pass `lp` rested on: usable runs on its fingerprint when it opened.
+    """The commands pass `lp` rested on, as recorded when it opened (`rested_on`).
 
     One answer for every gate that asks it. Each used to compute it inline, and only "when
     the scope has moved since": standing on the reviewed fingerprint — right after
     `pass-record`, or after reverting a fix — the set came out empty, so a check re-run there
     to exit 126 read as a typo no pass leaned on, and a plain `validate-drop` retracted the
-    green record the review was granted on along with it. Records made *after* the pass
-    opened are not what it rested on, even on the same fingerprint: a typo typed later stays
-    a typo. A record retracted since then (a forced retirement) drops out by `is_evidence`.
+    green record the review was granted on along with it. It is a fact about the pass, so
+    nothing done afterwards rewrites it: a typo typed later on the same state is not in it,
+    and a check retired later is still in it — taking it out is `retired`'s job, read from
+    the log's order. Passes recorded before the set was stored fall back to the log.
     """
     if lp is None:
-        return {}
-    upto = lp.get("validation_upto", len(state["validation"]))
-    rested = {}
-    for v in state["validation"][:upto]:
-        if v["fingerprint"] == lp["fingerprint"] and is_evidence(v):
-            rested[v["cmd"]] = v
-    return evidence_set(rested)
+        return set()
+    if "rested_on" in lp:
+        return set(lp["rested_on"])
+    return set(evidence_set(validation_at(state, lp["fingerprint"])))
 
 
 def missing_since_last_pass(state):
@@ -509,7 +526,7 @@ def missing_since_last_pass(state):
     present, retired = validation_view(state)
     # A retired check is one a human took out of the set; without this the set could only
     # ever grow and `validate-drop` could not do what its message promises.
-    return [c for c in prior if c not in present and c not in retired]
+    return sorted(c for c in prior if c not in present and c not in retired)
 
 
 def red_provenance(state, cmd):
@@ -992,8 +1009,15 @@ def cmd_validate_drop(a):
     # withdraw a mistaken declaration was to type the script's internal marker verbatim.
     cmd = NO_CHECK if a.none else join_cmd(a.command)
     state["fingerprint_current"] = fp_of(state)
-    hits = [v for v in state["validation"]
-            if v["cmd"] == cmd and v["fingerprint"] == state["fingerprint_current"] and not v.get("retracted")]
+    # Records still in effect: a retirement supersedes every run of the command before it.
+    hits = []
+    for v in state["validation"]:
+        if v["cmd"] != cmd:
+            continue
+        if is_retirement(v):
+            hits = []
+        elif v["fingerprint"] == state["fingerprint_current"] and not v.get("retracted"):
+            hits.append(v)
     lp = last_recorded_pass(state)
     # Membership in the last pass's evidence set, decided on its own — *not* on whether the
     # command also has a record here. Reading it as "no record here" left the rule open from
@@ -1024,13 +1048,10 @@ def cmd_validate_drop(a):
                     "that evidence" if kind == "green" else
                     "re-run it, or retire it with --force (that weakens the evidence set)")
             die(f"`{cmd}` carried pass {lp['n']} and {why}; {tail}")
-        for v in hits:
-            v["retracted"] = {"at": now(), "reason": a.reason or f"retired: inherited from pass {lp['n']}"}
-        # The retirement is always stamped as its own entry, records marked or not.
-        # `validation_view` reads a command's latest *event* by list position, and marking
-        # the records here in place is not one: a later run of the command on another
-        # fingerprint stayed the latest event, the check left the current state without
-        # entering `retired`, and `pass-start` went on demanding what was just retired.
+        # The retirement is its own entry and touches no record. Marking the runs in place
+        # was invisible to `validation_view`, which reads events by list position (a later
+        # run on another fingerprint stayed the latest event), and it rewrote the history
+        # `pass_evidence` had been read from. The runs stay; the event supersedes them.
         state["validation"].append({
             "cmd": cmd, "exit": None, "at": now(), "fingerprint": state["fingerprint_current"],
             "retracted": {"at": now(), "reason": a.reason or (
@@ -1160,10 +1181,10 @@ def cmd_pass_start(a):
         print("  in report-only write them into the findings file; in fix mode they still "
               "block `accept`, so fix them or close the area incomplete with them as the "
               "blocker", file=sys.stderr)
-    # How much of the validation history existed when the pass opened: what it rested on is
-    # bounded by this, not by whatever later lands on the same fingerprint (`pass_evidence`).
+    # What the pass rested on, fixed now: later runs on this fingerprint and later
+    # retirements must not rewrite it (`pass_evidence`).
     entry = {"n": n, "opened": now(), "fingerprint": state["fingerprint_current"], "result": None,
-             "validation_upto": len(state["validation"])}
+             "rested_on": sorted(evidence_set(validation_at(state, state["fingerprint_current"])))}
     if red:
         entry["opened_over_red"] = [v["cmd"] for v in red]
         entry["red_provenance"] = {v["cmd"]: red_provenance(state, v["cmd"]) for v in red}
