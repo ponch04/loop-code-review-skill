@@ -2102,6 +2102,32 @@ def a_validation_command_is_checked_before_it_runs():
 
 
 @case
+def a_blank_path_argument_is_refused_not_read_as_the_cwd():
+    """`os.path.abspath("")` is the cwd, so an empty shell variable became `.`.
+
+    `scope -- "$EXTRA"` with EXTRA unset widened the loop to the whole repository — and scope
+    never narrows, so for good; `init` and `project init` reviewed everything instead of
+    refusing; `--task-brief-file ""` tried to read a directory.
+    """
+    d = repo({"a.py": "1\n", "b.py": "2\n"})
+    write(d, "a.py", "v2\n")
+    for args in (("init", "--", ""), ("init", "--", "a.py", "  "),
+                 ("init", "--task-brief-file", "", "--", "a.py"),
+                 ("project", "init", "--", ""), ("project", "init", "--", "a.py", "+", "")):
+        r = run(*args, cwd=d)
+        ok(r.returncode == 2 and "empty path" in r.stderr,
+           f"`{' '.join(map(repr, args))}` must be refused as an empty path: rc={r.returncode} "
+           f"{r.stderr.strip()[-160:]}")
+    ok(not os.path.exists(os.path.join(d, ".loop-review", "state.json"))
+       and not os.path.exists(os.path.join(d, ".loop-review", "project.json")),
+       "and none of them may start a loop or a queue")
+    run("init", "--", "a.py", cwd=d, check=True)
+    r = run("scope", "--", "", cwd=d)
+    ok(r.returncode == 2 and "empty path" in r.stderr and read_state(d)["scope"] == ["a.py"],
+       f"`scope -- ''` must not widen the loop to the repository: {read_state(d)['scope']}")
+
+
+@case
 def argument_values_are_validated():
     d = repo()
     write(d, "a.py", "v2\n")
