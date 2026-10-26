@@ -66,8 +66,10 @@ report: the ledger records the widened paths as `reviewed_paths`, and if the fil
 area already closed, that area's outcome no longer describes what is on disk, so name it as a
 residual risk. In `--report-only` nothing is fixed, so this cannot arise.
 
-Everything else settles the area instead of blocking it: no recorded pass or no credible
-understanding closes it `incomplete` with its blocker, and an area that exhausted its passes
+Everything else settles the area instead of blocking it: no recorded pass, no credible
+understanding, no test-evidence verdict, or no validation that actually ran on the reviewed
+state (none left, or a 126/127 that never started) closes it `incomplete` with its blocker —
+red is allowed, absent is not, and an area that exhausted its passes
 closes on whatever it has. An area whose paths no longer match any file is recorded `incomplete`
 by `project next` itself, which exits 2 — run `project next` again for the one behind it. **Never stop the
 project on one stuck area.**

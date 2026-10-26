@@ -514,6 +514,23 @@ def pass_evidence(state, lp):
     return set(evidence_set(validation_at(state, lp["fingerprint"])))
 
 
+def pass_rested_on(state, cmd):
+    """The latest pass — recorded or open, never aborted — whose evidence set holds `cmd`.
+
+    The question `validate-drop` and the `pass-start` hint ask: did *any* review rest on this
+    check? Asked of the last recorded pass alone, it missed a pass still open on this very
+    state, and a check an earlier pass rested on that a later one was opened without
+    (`pass-start --force`) — and either way a re-run to 126/127 turned the check into a typo
+    a plain `validate-drop` could clear. Fingerprints play no part: membership is a fact
+    about the pass (`pass_evidence`). A forced retirement still ends the matter until the
+    command is run again; that is `retired`, asked separately.
+    """
+    for x in reversed(state["passes"]):
+        if not x.get("aborted") and cmd in pass_evidence(state, x):
+            return x
+    return None
+
+
 def missing_since_last_pass(state):
     """Commands the last pass rested on that have no record on the current state.
 
@@ -640,6 +657,21 @@ def review_integrity(state, phrasing="loop"):
         out.append("the area moved since the pass; the review describes code that is no "
                    "longer there" if area else
                    "scoped changes moved since the last pass; review is stale")
+    # Condition 1's floor, asked of both modes. Report-only does not need the checks green —
+    # an area is reviewed as it stands — but it needs them to *exist*: `validate-drop --none`
+    # or a retracted record could leave the reviewed state with no validation at all, and a
+    # 126/127 is evidence about nothing, so the area closed `reviewed` on checks nobody ran.
+    cur = current_validation(state)
+    if not cur:
+        out.append("no validation run against the current state")
+    never_ran = [v for v in cur if v["exit"] in NEVER_RAN]
+    if never_ran:
+        out.append("validation red: " + ", ".join(f"`{v['cmd']}` never ran (exit {v['exit']})"
+                                                  for v in never_ran))
+    missing = missing_since_last_pass(state)
+    if missing:
+        out.append(f"pass {lp['n']} rested on check(s) with no record on the current state: "
+                   + ", ".join(f"`{c}`" for c in missing))
     if not lp["result"]["understood"]:
         out.append("reviewer did not demonstrate a credible understanding"
                    + ("" if area else " of the change"))
@@ -660,11 +692,10 @@ def blockers(state):
     lp = last_recorded_pass(state)
     if lp is None or lp.get("result") is None:
         return reasons
-    cur = current_validation(state)
-    red = [v for v in cur if v["exit"] != 0]
-    if not cur:
-        reasons.append("no validation run against the current state")
-    elif red:
+    # Absent and never-ran validation are `review_integrity`'s; a check that ran and failed
+    # is an acceptance matter — in report-only it is the area's state, to be reported.
+    red = [v for v in current_validation(state) if v["exit"] != 0 and v["exit"] not in NEVER_RAN]
+    if red:
         reasons.append(f"validation red: {red[-1]['cmd']}")
     unresolved = lp["result"]["findings"] - lp["result"]["resolved"]
     if unresolved > 0:
@@ -1032,14 +1063,14 @@ def cmd_validate_drop(a):
             hits = []
         elif v["fingerprint"] == state["fingerprint_current"] and not v.get("retracted"):
             hits.append(v)
-    lp = last_recorded_pass(state)
-    # Membership in the last pass's evidence set, decided on its own — *not* on whether the
+    lp = pass_rested_on(state, cmd)
+    # Membership in a pass's evidence set, decided on its own — *not* on whether the
     # command also has a record here. Reading it as "no record here" left the rule open from
     # the other side: running an inherited check so it fails to start (126/127) put it in the
     # never-ran branch, where a plain `validate-drop` retired it and `pass-start` accepted the
     # shrunken set. A check the review was granted on stays evidence even once the tool that
     # ran it is gone; what changed is the environment, and that is the human's call to weigh.
-    inherited = cmd in pass_evidence(state, lp)
+    inherited = lp is not None
     _, retired = validation_view(state)
     if cmd in retired and not hits:
         # Already out of the set and still out — the retirement holds until the command is
@@ -1053,7 +1084,7 @@ def cmd_validate_drop(a):
             print_validation(cur, "recorded on the current state", state, file=sys.stderr)
         sys.exit(1)
     if inherited:
-        # A check carried over from the last pass. `pass-start` only opens a pass on green
+        # A check a pass rested on. `pass-start` only opens a pass on green
         # validation, so anything in that set passed — retiring it weakens the evidence the
         # review was granted on, and that is a human call, never the agent's.
         if not a.force:
@@ -1159,8 +1190,7 @@ def cmd_pass_start(a):
             # fail. Refuse in every mode. Two different exits, and naming the wrong one is
             # how the gate got walked around: a check the last pass rested on is still
             # evidence once its tool disappears, so retiring it needs `--force`.
-            prior = pass_evidence(state, lp)
-            carried = [v["cmd"] for v in payload if v["cmd"] in prior]
+            carried = [v["cmd"] for v in payload if pass_rested_on(state, v["cmd"])]
             die("these command(s) never ran (missing tool or typo), so they are evidence about "
                 "nothing: " + "; ".join(f"`{v['cmd']}` (exit {v['exit']})" for v in payload)
                 + " — fix the command and re-run it, or retract the record with `validate-drop`."
