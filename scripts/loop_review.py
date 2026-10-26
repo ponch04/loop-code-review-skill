@@ -92,7 +92,16 @@ def user_path(v):
     subdirectory, `--task-brief-file brief.md` read a same-named file at the root and briefed
     every reviewer of the loop with someone else's document, silently. Resolving at parse
     time — before any chdir — makes the ordering inside command bodies stop mattering.
+
+    A blank argument is refused here, for every path flag at once. `os.path.abspath("")` is
+    the cwd, so an empty shell variable (`init -- "$FILE"`, `scope -- "$EXTRA"`) became `.`:
+    the scope silently grew to the whole repository — irreversibly, for `scope` — and
+    `--task-brief-file ""` tried to read a directory.
     """
+    if not v.strip():
+        raise argparse.ArgumentTypeError(
+            "empty path — an unset variable? A blank argument resolves to the current "
+            "directory; name `.` explicitly if that is what you mean")
     return os.path.abspath(v)
 
 
