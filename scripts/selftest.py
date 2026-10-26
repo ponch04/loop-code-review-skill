@@ -1003,6 +1003,54 @@ def report_only_close_reads_the_same_conditions_as_the_acceptance_gate():
 
 
 @case
+def a_review_without_a_test_evidence_verdict_is_not_a_review_in_either_mode():
+    """The verdict is required output of the reviewer, not an acceptance-only condition.
+
+    Its absence was checked in `blockers()` alone, which report-only `project close` never
+    calls: an area recorded `--understood` without `--test-evidence` closed `reviewed`, with
+    `test_evidence: null` and no blocker — and the text ledger, which printed the verdict
+    only when it was set, showed nothing missing either.
+    """
+    d = repo({"pkg/a.py": "x\n", "lib/b.py": "y\n"})
+    run("project", "init", "--report-only", "--", "pkg", "lib", cwd=d, check=True)
+    out = run("project", "next", cwd=d, check=True).stdout
+    stem = out.split("findings file: ")[1].splitlines()[0]
+    run("validate", "--", "true", cwd=d)
+    run("pass-start", cwd=d, check=True)
+    run("pass-record", "--score", "9", "--findings", "0", "--understood", cwd=d, check=True)
+    write_text(os.path.join(d, stem), "A. clean\nB. understood\nD. 9\n")
+    run("project", "close", cwd=d, check=True)
+    area = read_state(d, "project.json")["areas"][0]
+    ok(area["status"] == "incomplete"
+       and any("test evidence not assessed" in b for b in area["blockers"]),
+       f"no verdict, no review: {area['status']}, {area['blockers']}")
+
+    out = run("project", "next", cwd=d, check=True).stdout          # `lib`, with a verdict
+    stem = out.split("findings file: ")[1].splitlines()[0]
+    pass_through(d, "9.5", "0", "trusted")
+    write_text(os.path.join(d, stem), "A. clean\n")
+    run("project", "close", cwd=d, check=True)
+    rows = {l.split("]", 1)[1].split()[0]: l
+            for l in run("project", "status", cwd=d, check=True).stdout.splitlines()
+            if l.startswith("  [")}
+    ok("test-evidence not assessed" in rows["pkg"],
+       f"a missing verdict must be printed as missing: {rows['pkg']}")
+    ok("findings-file " + stem in rows["lib"] and "test-evidence trusted" in rows["lib"],
+       f"the per-area report names the verdict and the findings file: {rows['lib']}")
+
+    # Fix mode still refuses acceptance on it, now from the shared list.
+    d = repo()
+    write(d, "a.py", "v2\n")
+    run("init", "--", "a.py", cwd=d, check=True)
+    run("validate", "--", "true", cwd=d)
+    run("pass-start", cwd=d, check=True)
+    run("pass-record", "--score", "9", "--findings", "0", "--understood", cwd=d, check=True)
+    r = run("accept", cwd=d)
+    ok(r.returncode != 0 and "test evidence not assessed" in r.stdout + r.stderr,
+       f"accept must name the missing verdict: {(r.stdout + r.stderr).strip()[:160]}")
+
+
+@case
 def report_only_close_refuses_to_read_an_open_pass_as_a_review():
     """Silence is not a verdict — in both modes.
 
