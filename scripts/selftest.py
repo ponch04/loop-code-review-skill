@@ -1604,6 +1604,81 @@ def a_retirement_never_rewrites_what_the_pass_rested_on():
 
 
 @case
+def a_check_any_pass_rested_on_needs_force_not_only_the_last_one():
+    """"No recorded pass rested on it" means no pass, not the last recorded one.
+
+    A later pass opened without the check — `pass-start --force`, a human call past the
+    shrinkage gate — made it look unclaimed: on the next state a re-run to 127 read as a typo
+    and a plain `validate-drop` cleared it, though pass 1 had been granted on it.
+    """
+    d = repo({"src/a.py": "1\n"})
+    tool = os.path.join(d, "suite.sh")
+    write_text(tool, "#!/bin/sh\nexit 0\n")
+    os.chmod(tool, 0o755)
+    write(d, "src/a.py", "2\n")
+    run("init", "--", "src", cwd=d, check=True)
+    run("validate", "--", tool, cwd=d)
+    run("validate", "--", "true", cwd=d)
+    run("pass-start", cwd=d, check=True)
+    run("pass-record", "--score", "7", "--findings", "1", "--understood",
+        "--test-evidence", "trusted", cwd=d, check=True)
+    write(d, "src/a.py", "3\n")
+    run("resolve", "--fixed", "1", cwd=d, check=True)
+    run("validate", "--", "true", cwd=d)
+    run("pass-start", "--force", cwd=d, check=True)  # the human opened pass 2 without it
+    run("pass-record", "--score", "8", "--findings", "1", "--understood",
+        "--test-evidence", "trusted", cwd=d, check=True)
+    write(d, "src/a.py", "4\n")                      # a new fingerprint
+    run("resolve", "--fixed", "1", cwd=d, check=True)
+    os.remove(tool)
+    run("validate", "--", "true", cwd=d)
+    run("validate", "--", tool, cwd=d)               # -> exit 127
+    r = run("validate-drop", "--", tool, cwd=d)
+    ok(r.returncode != 0 and "carried pass 1" in r.stderr and "--force" in r.stderr,
+       f"pass 1 rested on it, so dropping it needs --force: rc={r.returncode} "
+       f"{r.stderr.strip()[:160]}")
+    r = run("pass-start", cwd=d)
+    ok(r.returncode != 0 and "never ran" in r.stderr and "carried the last pass" in r.stderr,
+       f"and pass-start's hint must say so too: {r.stderr.strip()[:240]}")
+
+
+@case
+def report_only_close_needs_validation_that_ran():
+    """Red is allowed in report-only; absent or never-ran validation is not.
+
+    `review_integrity` never asked about validation, and report-only close reads nothing
+    else: withdrawing the area's `validate --none` after the pass, or a check that could not
+    start on the reviewed state, still closed the area `reviewed`.
+    """
+    def area(kind):
+        d = repo({"pkg/a.py": "x\n"})
+        run("project", "init", "--report-only", "--", "pkg", cwd=d, check=True)
+        out = run("project", "next", cwd=d, check=True).stdout
+        stem = out.split("findings file: ")[1].splitlines()[0]
+        if kind == "none":
+            run("validate", "--none", "--reason", "prose only", cwd=d, check=True)
+        else:
+            run("validate", "--", "true", cwd=d)
+        run("pass-start", cwd=d, check=True)
+        run("pass-record", "--score", "9", "--findings", "0", "--understood",
+            "--test-evidence", "justified-absent", cwd=d, check=True)
+        if kind == "none":
+            run("validate-drop", "--none", cwd=d, check=True)
+        else:
+            run("validate", "--", "nosuchtool --x", cwd=d)    # exit 127, on the reviewed state
+        write_text(os.path.join(d, stem), "A. clean\n")
+        run("project", "close", cwd=d, check=True)
+        return read_state(d, "project.json")["areas"][0]
+
+    row = area("none")
+    ok(row["status"] == "incomplete" and any("no validation" in b for b in row["blockers"]),
+       f"no validation left, no review: {row['status']}, {row['blockers']}")
+    row = area("never-ran")
+    ok(row["status"] == "incomplete" and any("never ran" in b for b in row["blockers"]),
+       f"a check that never ran is evidence about nothing: {row['status']}, {row['blockers']}")
+
+
+@case
 def a_fresh_typo_no_pass_rested_on_still_clears_without_force():
     """The other side of the same rule: the never-ran exemption must survive the fix, or a
     mistyped command would strand the loop it never contributed evidence to."""
