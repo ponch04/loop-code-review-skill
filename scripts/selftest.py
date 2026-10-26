@@ -310,6 +310,48 @@ def reset_still_refuses_to_discard_the_loop_of_the_area_that_owns_it():
 
 
 @case
+def init_refuses_over_an_area_whose_loop_state_is_gone():
+    """The mid-area guard on `init` was asked only when `state.json` existed.
+
+    Once the area's loop state was gone — a crash, or `reset` clearing a foreign loop, which
+    it is allowed to do — `init --mode project -- a b` went through without `--force`, and
+    its wider scope was then read by `project close` as this area's own loop: the row closed
+    `reviewed` from a review nobody opened for it. Refuse on the ledger alone, and do not
+    let an unstamped loop pass for the area's even if one gets there by other means.
+    """
+    d = repo({"a/x.py": "1\n", "b/y.py": "2\n"})
+    run("project", "init", "--report-only", "--", "a", "b", cwd=d, check=True)
+    stem = run("project", "next", cwd=d, check=True).stdout.split("findings file: ")[1].splitlines()[0]
+    sf = os.path.join(d, ".loop-review", "state.json")
+    os.remove(sf)                                      # the area's loop state is lost
+
+    r = run("init", "--mode", "project", "--", "a", "b", cwd=d)
+    ok(r.returncode != 0 and "in progress and its loop state is gone" in r.stderr
+       and "project close --force" in r.stderr,
+       f"init must refuse over an in-progress area with no loop: rc={r.returncode} "
+       f"{r.stderr.strip()[:200]}")
+    ok(not os.path.exists(sf), "the refusal must not leave a loop behind")
+
+    # A loop `init` wrote anyway (an older script, a hand edit) carries no area stamp.
+    proj = read_state(d, "project.json")
+    write_state(d, {"areas": []}, "project.json")
+    run("init", "--mode", "project", "--", "a", "b", cwd=d, check=True)   # lists `a`, and more
+    write_state(d, proj, "project.json")
+    pass_through(d, "9.5", "0", "trusted")
+    write_text(os.path.join(d, stem), "A. no actionable findings\n")
+    r = run("project", "close", cwd=d)
+    ok(r.returncode != 0 and "not area" in r.stderr,
+       f"an unstamped wider loop must not close the area's row: rc={r.returncode} "
+       f"{r.stderr.strip()[:160]}")
+    ok(read_state(d, "project.json")["areas"][0]["status"] == "in_progress",
+       "the row must stay open after the refusal")
+    r = run("reset", cwd=d)
+    ok(r.returncode == 0 and not os.path.exists(sf),
+       f"and reset must treat it as foreign, not as the area's own: rc={r.returncode} "
+       f"{r.stderr.strip()[:160]}")
+
+
+@case
 def a_refused_area_does_not_block_the_areas_behind_it():
     """One renamed directory must not make every later area unreachable."""
     d = repo({"a/x.py": "1\n", "gone/y.py": "2\n", "c/z.py": "3\n"})
@@ -2841,7 +2883,13 @@ def a_project_area_cannot_be_closed_from_someone_elses_loop():
     r = run("init", "--force", "--", "lib/b.py", cwd=d)
     ok(r.returncode != 0, "re-initialising inside a live area must be refused")
     os.remove(os.path.join(d, ".loop-review", "state.json"))   # the loop is lost
-    run("init", "--", "lib/b.py", cwd=d, check=True)           # a foreign changes-mode loop
+    r = run("init", "--", "lib/b.py", cwd=d)
+    ok(r.returncode != 0 and "loop state is gone" in r.stderr,
+       f"nor may a loop be started where the area's own was lost: {r.stderr.strip()[:160]}")
+    proj = read_state(d, "project.json")                       # a foreign changes-mode loop,
+    write_state(d, {"areas": []}, "project.json")              # made behind the ledger's back
+    run("init", "--", "lib/b.py", cwd=d, check=True)
+    write_state(d, proj, "project.json")
     pass_through(d, "10", "0", "trusted")
     ok(run("accept", cwd=d).returncode == 0, "that foreign loop is itself acceptable")
     findings(d, "pkg")            # so the close cannot fail merely for a missing file

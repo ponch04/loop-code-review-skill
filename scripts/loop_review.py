@@ -702,15 +702,23 @@ def cmd_init(a):
     # from its ledger: the replacement loop can be a `changes` diff of anything, and
     # `project close` would then record that area `accepted` from a review of something else.
     # `reset` already refuses this exact situation; so does `project init`.
-    if os.path.exists(PROJECT_FILE) and os.path.exists(STATE_FILE):
+    # Asked whether or not a loop state exists: an area whose state was lost — a crash, or
+    # `reset` clearing a foreign loop — is still in progress in the ledger, and a fresh
+    # `init` there was the one loop nothing stopped from being read as that area's.
+    if os.path.exists(PROJECT_FILE):
         try:
             busy = next((x for x in read_json(PROJECT_FILE)["areas"] if x["status"] == "in_progress"), None)
         except (OSError, ValueError, KeyError):
             busy = None
         if busy:
-            die(f"area `{area_name(busy)}` is mid-loop — `project close` records its outcome "
-                "first. Re-initialising here would close that area from a review of something "
-                "else; `--force` does not cover that.")
+            if os.path.exists(STATE_FILE):
+                die(f"area `{area_name(busy)}` is mid-loop — `project close` records its outcome "
+                    "first. Re-initialising here would close that area from a review of something "
+                    "else; `--force` does not cover that.")
+            die(f"area `{area_name(busy)}` is in progress and its loop state is gone — "
+                "`project close --force` settles it `incomplete` and the queue continues with "
+                "`project next`. A loop started here would be read as that area's; `--force` "
+                "does not cover that.")
     if (a.task_brief or a.task_brief_file) and a.mode == "project":
         # An inherited area has no task and therefore no acceptance criteria to miss;
         # a brief here would only be the operator's opinion smuggled past isolation.
@@ -1578,15 +1586,15 @@ def loop_is_area(state, area):
     it currently covers. Scope cannot answer it: `scope --` legitimately widens a loop beyond
     its queued paths, so "the loop covers this area" also matched a *different* area's loop
     that merely contained these paths — and `project close` signed that review into this
-    area's row without so much as a `--force`. A loop opened before this field existed is
-    still matched by containment; there is nothing else to go on.
+    area's row without so much as a `--force`. No stamp, no match: the containment fallback
+    kept for loops older than the stamp also matched any `init --mode project` whose scope
+    lists the area's paths among others — a loop `project next` never opened. An unstamped loop is foreign; `project close --force`
+    settles the area `incomplete`, which never lets an unreviewed area pass.
     """
     if state.get("mode") != "project":
         return False
     opened_for = state.get("area")
-    if opened_for is not None:
-        return list(opened_for) == list(area_paths(area))
-    return set(area_paths(area)) <= set(state.get("scope") or [])
+    return opened_for is not None and list(opened_for) == list(area_paths(area))
 
 
 def area_name(x):
