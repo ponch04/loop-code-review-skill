@@ -1796,6 +1796,46 @@ def inadequate_test_evidence_blocks_acceptance():
 
 
 @case
+def resolution_is_read_from_the_log_by_every_gate():
+    """`resolved` and `any(fixed)` were read beside the log, and each came apart from it.
+
+    A stray `resolve --fixed` locked `accept` for good on the reviewed state even after every
+    finding was withdrawn — a review that asked for no change at all. And `amend --findings`,
+    which the clamp in `resolve` recommends, raised the total without re-reading the
+    resolutions the log already held, so they stayed unresolved.
+    """
+    def loop(findings):
+        d = repo()
+        write(d, "a.py", "v2\n")
+        run("init", "--", "a.py", cwd=d, check=True)
+        run("validate", "--", "true", cwd=d)
+        run("pass-start", cwd=d, check=True)
+        run("pass-record", "--score", "8", "--findings", str(findings), "--understood",
+            "--test-evidence", "trusted", cwd=d, check=True)
+        return d
+
+    d = loop(2)
+    run("resolve", "--fixed", "1", cwd=d, check=True)              # typed in error
+    run("resolve", "--withdrawn", "2", cwd=d, check=True)          # the reviewer withdrew both
+    r = run("accept", cwd=d)
+    ok(r.returncode == 0,
+       f"nothing left to fix, so the reviewed state is the honest one: {r.stdout.strip()[:200]}")
+
+    d = loop(2)                                                     # the gate still holds
+    run("resolve", "--withdrawn", "1", "--fixed", "1", cwd=d, check=True)
+    r = run("accept", cwd=d)
+    ok(r.returncode != 0 and "recorded fixes are not present" in r.stdout,
+       f"a finding that stands and was 'fixed' with no edit must still block: {r.stdout.strip()[:200]}")
+
+    d = loop(1)
+    run("resolve", "--withdrawn", "2", cwd=d, check=True)          # clamped to 1/1
+    out = run("amend", "--findings", "2", cwd=d, check=True).stdout
+    ok("2/2 resolved" in out, f"amend must reconcile the raised total with the log: {out.strip()[:200]}")
+    r = run("accept", cwd=d)
+    ok(r.returncode == 0, f"and accept must read the same: {r.stdout.strip()[:200]}")
+
+
+@case
 def unresolved_findings_block_acceptance():
     d = repo()
     write(d, "a.py", "v2\n")

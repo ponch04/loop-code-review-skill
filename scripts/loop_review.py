@@ -702,6 +702,35 @@ def review_integrity(state, phrasing="loop"):
     return out
 
 
+def resolution(r):
+    """A pass result's resolution state, derived from `resolution_log` — the one record.
+
+    `resolved` was a counter kept beside the log and read on its own, and the two came apart:
+    `amend --findings` raised the total without re-reading what the log had already claimed,
+    and `blockers()` asked `any(fixed)` of the log, so one stray `resolve --fixed` blocked
+    `accept` for good on the reviewed state even after every finding was withdrawn or
+    adjudicated invalid — a review that asked for no fix at all. Everything here is read from
+    the log, so whoever asks gets the same answer.
+
+    `needs_fix` is how many findings still stand once the dismissed ones are taken out: zero
+    means nothing has to change on disk, so standing on the reviewed fingerprint is honest.
+    A result written before the log existed keeps its stored counter as `unattributed`
+    (`cmd_resolve` seeds it into the log): it counts as resolved and, as it always did, it
+    does not tie the review to a fix the script cannot know was made.
+    """
+    findings = r["findings"]
+    log = r.get("resolution_log")
+    if log is None:
+        log = [{"unattributed": r.get("resolved") or 0}]
+    fixed = sum(x.get("fixed", 0) for x in log)
+    dismissed = sum(x.get("withdrawn", 0) + x.get("adjudicated_invalid", 0) for x in log)
+    unattributed = sum(x.get("unattributed", 0) for x in log)
+    claimed = fixed + dismissed + unattributed
+    return {"fixed": fixed, "dismissed": dismissed, "claimed": claimed,
+            "resolved": min(findings, claimed),
+            "needs_fix": max(0, findings - dismissed - unattributed)}
+
+
 def blockers(state):
     """Return list of reasons acceptance is not possible. Empty list == accepted."""
     reasons = review_integrity(state)
@@ -713,19 +742,21 @@ def blockers(state):
     red = [v for v in current_validation(state) if v["exit"] != 0 and v["exit"] not in NEVER_RAN]
     if red:
         reasons.append(f"validation red: {red[-1]['cmd']}")
-    unresolved = lp["result"]["findings"] - lp["result"]["resolved"]
+    res = resolution(lp["result"])
+    unresolved = lp["result"]["findings"] - res["resolved"]
     if unresolved > 0:
         reasons.append(f"{unresolved} unresolved actionable finding(s) from pass {lp['n']}")
-    elif lp["result"]["resolved"]:
-        # Fixes were recorded on some state; if the scope is back on the fingerprint the
-        # review found defective, they are not on disk any more.
-        fixed = any(x.get("fixed") for x in lp["result"].get("resolution_log", []))
+    else:
+        # Findings that stand after withdrawals and adjudications were resolved by fixing;
+        # if the scope is back on the fingerprint the review found defective, those fixes
+        # are not on disk. None standing means nothing had to change, whatever `--fixed`
+        # was also typed — a stray one must not lock `accept` for good.
         # Standing on the reviewed fingerprint *is* the proof that the fixes are absent —
         # a fix changes the code, so it moves the hash. Excusing the case where the fix was
         # recorded on that same fingerprint excused the only way to reach it deliberately:
         # `resolve --fixed` typed before touching a file left the log pointing at the
         # reviewed state, the exemption fired, and `accept` signed off the defect itself.
-        if fixed and state["fingerprint_current"] == lp["fingerprint"]:
+        if res["needs_fix"] and state["fingerprint_current"] == lp["fingerprint"]:
             reasons.append("the scope is on the state the review found defective — the "
                            "recorded fixes are not present (never made, reverted, stashed, "
                            "checked out, or landed outside the scope: widen it with `scope --`)")
@@ -1421,6 +1452,9 @@ def cmd_amend(a):
         die(f"amend cannot lower findings ({r['findings']} -> {given['findings']}); "
             "record a fix, withdrawal or adjudication with `resolve` instead")
     r.update(given)
+    # A raised total is reconciled with what the log already claimed — the clamp in
+    # `resolve` sends the operator here for exactly that.
+    r["resolved"] = resolution(r)["resolved"]
     r.setdefault("amendments", []).append({**given, "at": now()})
     state["fingerprint_current"] = fp_of(state)
     save(state)
@@ -1445,8 +1479,8 @@ def cmd_resolve(a):
     if total == 0:
         die("resolve needs at least one of --fixed / --withdrawn / --adjudicated-invalid")
     r = lp["result"]
-    claimed = r["resolved"] + total
-    r["resolved"] = min(r["findings"], claimed)
+    if "resolution_log" not in r and r.get("resolved"):
+        r["resolution_log"] = [{"unattributed": r["resolved"], "at": now()}]
     state["fingerprint_current"] = fp_of(state)
     # Stamped with the state the fixes were made on. `resolved` was the one counter bound to
     # nothing, so reverting a fix batch (`git checkout --`, `stash`) put the scope back on the
@@ -1455,6 +1489,9 @@ def cmd_resolve(a):
     r.setdefault("resolution_log", []).append(
         {"fixed": a.fixed, "withdrawn": a.withdrawn, "adjudicated_invalid": a.adjudicated_invalid,
          "at": now(), "fingerprint": state["fingerprint_current"]})
+    res = resolution(r)
+    r["resolved"] = res["resolved"]   # kept for readers of state.json; the log decides
+    claimed = res["claimed"]
     save(state)
     print(f"pass {lp['n']}: {r['resolved']}/{r['findings']} resolved")
     if claimed > r["findings"]:
@@ -1462,7 +1499,7 @@ def cmd_resolve(a):
               "if the reviewer named more findings than were recorded, `amend --findings` first")
     if state["fingerprint_current"] != lp["fingerprint"]:
         print("scoped changes moved: validate, then open a new pass with a fresh reviewer")
-    elif a.fixed:
+    elif a.fixed and res["needs_fix"]:
         # Say it here, while the operator is still in the fix batch, rather than letting
         # them discover at `accept` that nothing they recorded is on disk. A fix changes
         # code, so it moves the fingerprint; one that did not is either still unwritten or
