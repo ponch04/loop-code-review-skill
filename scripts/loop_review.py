@@ -1917,8 +1917,8 @@ def cmd_project_next(a):
         print("report-only: record the pass, write the findings file, then `project close` — do not fix")
 
 
-def findings_are_current(ffile):
-    """True when a findings file exists for this review.
+def findings_problem(ffile):
+    """Why the findings file cannot stand in for the review, or None when it can.
 
     `project next` moves any previous review's file to `<slug>.prev.md`, so anything at this
     path was written during this area's current loop. The path repeats on every review of an
@@ -1926,8 +1926,25 @@ def findings_are_current(ffile):
     died with `state.json`. Do not reach for a timestamp instead: `now()` has one-second
     resolution and a whole area can open and close inside that second, so the comparison
     passes exactly when the runs are back to back.
+
+    Existence was the whole check, and `project close` deletes `state.json` right after it:
+    a `touch`, an interrupted `> file` redirect or a directory at that path passed, and the
+    area closed `reviewed` or `accepted` with no review text anywhere. The brief has been
+    held to "non-empty" since `--task-brief-file`; the one record that outlives the loop is
+    held to the same.
     """
-    return os.path.exists(ffile)
+    if not os.path.lexists(ffile):
+        return "is missing"
+    if not os.path.isfile(ffile):
+        return "is not a regular file"
+    try:
+        with open(ffile, "rb") as f:
+            body = f.read()
+    except OSError as e:
+        return f"cannot be read ({e.strerror})"
+    if not body.strip():
+        return "is empty"
+    return None
 
 
 def cmd_project_close(a):
@@ -1993,9 +2010,10 @@ def cmd_project_close(a):
         # the only surviving record of the review — for a clean area it is the *entire*
         # record, and skipping it loses the understanding summary, the test-evidence basis
         # and the score rationale for exactly the areas with no findings to remember them by.
-        if not terminal and not findings_are_current(ffile):
+        missing = None if terminal else findings_problem(ffile)
+        if missing:
             fixable.append(
-                f"{ffile} is missing — write *this* "
+                f"{ffile} {missing} — write *this* "
                 "reviewer's whole output there; closing deletes the loop state, so nothing "
                 "else survives")
         if fixable and not a.force:
@@ -2009,14 +2027,15 @@ def cmd_project_close(a):
         # The findings file is required here for the same reason as in report-only: closing
         # deletes `state.json`, so for a clean area that file is the entire surviving record
         # of the review — its understanding summary, test-evidence basis and score rationale.
-        if r and not findings_are_current(ffile):
+        missing = findings_problem(ffile) if r else None
+        if missing:
             if not a.force:
-                die(f"cannot close area: {ffile} is missing — write this reviewer's whole output there; closing deletes the loop state, so "
+                die(f"cannot close area: {ffile} {missing} — write this reviewer's whole output there; closing deletes the loop state, so "
                     "nothing else survives (--force closes it as incomplete instead, losing the review)")
             # Forcing past it cannot leave the area `accepted`: the record the row would rest
             # on is exactly what was never written, and `--force` never lets an area pass —
             # here as in report-only, it settles the area with the reason attached.
-            reasons = reasons + [f"{ffile} was never written — the review did not survive the close"]
+            reasons = reasons + [f"{ffile} {missing} — the review did not survive the close"]
         cur["status"] = "accepted" if not reasons else "incomplete"
         cur["blockers"] = reasons
     cur["closed"] = now()
@@ -2035,7 +2054,7 @@ def cmd_project_close(a):
     # `blockers()` is never consulted, so the ledger is the only place it can be reported.
     cur["test_evidence"] = r.get("test_evidence") if r else None
     cur["understood"] = r.get("understood") if r else None
-    cur["findings_file"] = ffile if os.path.exists(ffile) else None
+    cur["findings_file"] = ffile if findings_problem(ffile) is None else None
     save_project(p)
     os.remove(STATE_FILE)
     print(f"area `{area_name(cur)}` closed: {cur['status']}"

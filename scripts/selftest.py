@@ -1993,6 +1993,42 @@ def report_only_close_requires_the_findings_file():
 
 
 @case
+def an_empty_findings_file_is_no_review():
+    """Existence was the whole check, and `project close` deletes the loop state right after.
+
+    A `touch`, an interrupted `> file` redirect or a directory at the path passed, and the
+    area closed `reviewed` — or `accepted` — with no review text anywhere. Both modes, and
+    the refusal names what is wrong with the file rather than calling it missing.
+    """
+    for report_only, body, why in ((True, "", "is empty"), (True, " \n\t\n", "is empty"),
+                                   (True, None, "is not a regular file"),
+                                   (False, "", "is empty")):
+        d = repo({"pkg/a.py": "x\n"})
+        run("project", "init", *(["--report-only"] if report_only else []), "--", "pkg",
+            cwd=d, check=True)
+        out = run("project", "next", cwd=d, check=True).stdout
+        stem = os.path.join(d, out.split("findings file: ")[1].splitlines()[0])
+        pass_through(d, "9.5", "0", "trusted")
+        if body is None:
+            os.makedirs(stem)
+        else:
+            write_text(stem, body)
+        label = f"{'report-only' if report_only else 'fix mode'}, {why} ({body!r})"
+        r = run("project", "close", cwd=d)
+        ok(r.returncode != 0 and why in r.stderr,
+           f"{label}: close must refuse and say the file {why}: rc={r.returncode} "
+           f"{r.stderr.strip()[:200]}")
+        ok(os.path.exists(os.path.join(d, ".loop-review", "state.json")),
+           f"{label}: the refusal must keep the loop state, the review's only other record")
+
+        r = run("project", "close", "--force", cwd=d)
+        row = read_state(d, "project.json")["areas"][0]
+        ok(row["status"] == "incomplete" and row["findings_file"] is None
+           and any(why in b for b in row["blockers"]),
+           f"{label}: forced, it closes incomplete with no findings file on record: {row}")
+
+
+@case
 def forcing_a_close_past_a_missing_findings_file_never_yields_accepted():
     """`--force` never lets an area pass — fix mode was the hole.
 
