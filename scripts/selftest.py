@@ -3174,10 +3174,14 @@ def a_relative_base_is_pinned_so_a_later_commit_cannot_narrow_the_scope():
     sh("git add -A && git commit -qm first", d)
     write(d, "src/a.py", "one\ntwo\nthree\n")
     sh("git add -A && git commit -qm second", d)
-    run("init", "--base", "HEAD~2", "--", "src", cwd=d, check=True)
+    out = run("init", "--base", "HEAD~2", "--", "src", cwd=d, check=True).stdout
     st = json.loads(read_text(os.path.join(d, ".loop-review", "state.json")))
     ok(st["base"] and len(st["base"]) >= 40,
        f"the base must be pinned to a commit id, got {st['base']!r}")
+    # The agent copies init's confirmation into the reviewer's prompt; it printed the text
+    # typed (`vs HEAD~2`) while `status` printed the id, and only the id stays true.
+    ok(f"vs {st['base']}" in out and "HEAD~2" not in out,
+       f"init must confirm the pinned id, not the symbolic base: {out.strip()[:200]}")
     before = st["fingerprint_current"]
     write(d, "src/a.py", "one\ntwo\nthree\nfour\n")
     sh("git add -A && git commit -qm third", d)

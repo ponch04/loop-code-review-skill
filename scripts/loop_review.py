@@ -945,7 +945,9 @@ def cmd_init(a):
     # is exactly what an empty scope produces. In `changes` mode the workflow outcome is
     # `no-changes`; in `project` mode an empty area means a path that matches no file, and
     # closing it as reviewed would put a lie in the ledger.
-    if scope_is_empty(scope, a.mode, a.base):
+    # The pinned commit, never the text the operator typed: every later gate reads
+    # `state["base"]`, and the check that refuses an empty loop must ask the same question.
+    if scope_is_empty(scope, a.mode, base):
         if not a.allow_empty:
             if a.mode == "project":
                 die("the scoped area matches no file — check the paths; an area nobody can read "
@@ -958,7 +960,9 @@ def cmd_init(a):
               file=sys.stderr)
     warn_unseen(scope)
     save(state)
-    print(f"loop initialised ({a.mode}{' vs ' + a.base if a.base else ''}): {len(scope)} path(s), max {a.max_passes} passes, fingerprint {state['fingerprint_current']}")
+    # The pinned id, as `status` prints it: the agent copies this into the reviewer's prompt,
+    # and `HEAD~1` there names a different commit the moment anything is committed.
+    print(f"loop initialised ({a.mode}{' vs ' + base if base else ''}): {len(scope)} path(s), max {a.max_passes} passes, fingerprint {state['fingerprint_current']}")
     for p in scope:
         print(f"  - {p}")
     print_loop_context(state)
