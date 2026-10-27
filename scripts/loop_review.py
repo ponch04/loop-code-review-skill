@@ -1677,9 +1677,28 @@ def cmd_amend(a):
         print("note: scoped changes moved since this pass — the review is stale; validate and open a new pass")
 
 
+def report_only(state):
+    """True for the loop of a `--report-only` area, where the review ends at step 3.
+
+    `project next` stamped the mode into `state.json` and nothing read it, so the loop's own
+    commands behaved as fix mode: `status` judged the area by `blockers()` and announced
+    "ready to accept", and `accept` and `resolve` ran — the steps references/project-mode.md
+    says not to take there, `accept` because it "only invites a contradictory report".
+    """
+    return state.get("mode") == "project" and bool(state.get("report_only"))
+
+
+REPORT_ONLY_EXIT = ("this is a --report-only area: the review ends once the pass is recorded "
+                    "and its findings file written — `project close` records it, `reviewed` "
+                    "or `incomplete` with its blockers; `amend` completes the reviewer's output")
+
+
 def cmd_resolve(a):
     os.chdir(repo_root())
     state = load()
+    if report_only(state):
+        # Nothing is fixed in report-only, so nothing is resolved: findings are the report.
+        die(f"`resolve` records a fix or a dismissal, and {REPORT_ONLY_EXIT}")
     lp = require_recorded_pass(state, "resolve", "no recorded pass to resolve against")
     counts = (("--fixed", a.fixed), ("--withdrawn", a.withdrawn), ("--adjudicated-invalid", a.adjudicated_invalid))
     # Each flag counts something that happened, so it cannot be negative, and a call that
@@ -1725,6 +1744,8 @@ def cmd_resolve(a):
 def cmd_accept(a):
     os.chdir(repo_root())
     state = load()
+    if report_only(state):
+        die(f"`accept` is the fix-mode gate, and {REPORT_ONLY_EXIT}")
     state["fingerprint_current"] = fp_of(state)
     save(state)
     reasons = blockers(state)
@@ -1750,7 +1771,10 @@ def cmd_status(a):
     os.chdir(repo_root())
     state = load()
     state["fingerprint_current"] = fp_of(state)
-    state["blockers"] = blockers(state)
+    # The questions the area's own close will ask: in report-only that is review_integrity,
+    # never blockers() — inherited red, open findings and an `inadequate` verdict are the
+    # report there, not obstacles to an `accept` that is not the gate.
+    state["blockers"] = review_integrity(state, "area") if report_only(state) else blockers(state)
     if a.json:
         print(json.dumps(state, indent=2))
         return
@@ -1776,7 +1800,9 @@ def cmd_status(a):
         else:
             print(f"  #{p['n']}  (open)")
     print_validation(current_validation(state), state=state)
-    print("blockers: " + ("none — ready to accept" if not state["blockers"] else "; ".join(state["blockers"])))
+    ready = ("none — ready for `project close` (with this reviewer's output in its findings file)"
+             if report_only(state) else "none — ready to accept")
+    print("blockers: " + (ready if not state["blockers"] else "; ".join(state["blockers"])))
 
 
 def cmd_fingerprint(a):
