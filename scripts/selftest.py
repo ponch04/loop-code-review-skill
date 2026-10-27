@@ -377,6 +377,68 @@ def a_tracked_file_deleted_on_disk_is_warned_about_only_where_it_is_invisible():
     ok(run("fingerprint", cwd=d, check=True).stdout.strip() != before,
        "and the deletion is in fact what the fingerprint hashes")
 
+    # Every other way a deletion reaches the diff while the index no longer lists the path.
+    # Asking the index (`--cached`) warned on all of them, and called "seen" a file added to
+    # the index and then removed, which no diff carries.
+    def changes_init(setup, *init_args):
+        d = repo({"pkg/a.py": "x\n", "gone.py": "y\n"})
+        setup(d)
+        return run("init", *init_args, "--", "gone.py", cwd=d).stderr, d
+
+    for label, setup, args in (
+            ("git rm", lambda d: sh("git rm -q gone.py", d), ()),
+            ("git mv", lambda d: sh("git mv gone.py moved.py", d), ()),
+            ("committed since --base",
+             lambda d: sh("git rm -q gone.py && git commit -qm drop", d), ("--base", "HEAD~1"))):
+        err, _ = changes_init(setup, *args)
+        ok("gone.py" not in err, f"{label}: the deletion is in the diff, so no warning: {err.strip()[:200]}")
+
+    d = repo({"pkg/a.py": "x\n", "gone.py": "y\n"})              # `scope --` asks the same
+    write(d, "pkg/a.py", "x2\n")
+    run("init", "--", "pkg", cwd=d, check=True)
+    sh("git rm -q gone.py", d)
+    r = run("scope", "--", "gone.py", cwd=d, check=True)
+    ok("warning" not in r.stderr,
+       f"scope --: a deleted path in the diff is not unseen: {r.stderr.strip()[:200]}")
+
+    d = repo({"pkg/a.py": "x\n"})                                  # added, then removed
+    write(d, "pkg/a.py", "x2\n")
+    write(d, "ghost.py", "g\n")
+    sh("git add ghost.py", d)
+    os.remove(os.path.join(d, "ghost.py"))
+    r = run("init", "--", "pkg", "ghost.py", cwd=d, check=True)
+    ok("`ghost.py` does not exist on disk" in r.stderr,
+       f"a path only the index lists is in no diff and must be warned about: {r.stderr.strip()[:200]}")
+
+    if os.geteuid() != 0:                                           # root reads anything
+        d = repo({"pkg/a.py": "x\n"})
+        write(d, "pkg/a.py", "x2\n")
+        lock = os.path.join(d, "lock.py")
+        write_text(lock, "s\n")
+        os.chmod(lock, 0)
+        try:
+            r = run("init", "--", "pkg", "lock.py", cwd=d)
+            ok("`lock.py` cannot be read" in r.stderr,
+               f"an unreadable file in changes mode is still warned about: {r.stderr.strip()[:200]}")
+        finally:
+            os.chmod(lock, 0o644)
+
+        # A *tracked* unreadable file: `init` stops at `git diff` before it would warn, so
+        # the answer is asked of `unseen_paths` itself. The index lists it, and reading
+        # "listed" as "seen" hid it; an unreadable path is reported before any such check.
+        d = repo({"pkg/a.py": "x\n", "lock.py": "s\n"})
+        lock = os.path.join(d, "lock.py")
+        os.chmod(lock, 0)
+        cwd = os.getcwd()
+        os.chdir(d)
+        try:
+            got = dict(module().unseen_paths(["lock.py"], "changes"))
+        finally:
+            os.chdir(cwd)
+            os.chmod(lock, 0o644)
+        ok("cannot be read" in got.get("lock.py", ""),
+           f"a tracked unreadable file is not seen because git lists it: {got}")
+
 
 @case
 def an_area_is_what_can_be_read_from_disk_not_what_git_lists():

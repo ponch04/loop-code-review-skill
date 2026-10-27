@@ -369,7 +369,7 @@ def fingerprint(paths, mode="changes", base=None):
     return h.hexdigest()[:16]
 
 
-def unseen_paths(paths, mode="changes"):
+def unseen_paths(paths, mode="changes", base=None):
     """Scope paths git has no record of: ignored, or simply not there.
 
     Emptiness is asked of the scope as a whole, so one such path hides behind its healthy
@@ -388,10 +388,14 @@ def unseen_paths(paths, mode="changes"):
         listed = scope_files([p])
         if readable(listed):
             continue                                   # the fingerprint can see it
-        # In `changes` mode a tracked file deleted on disk is *in* the fingerprint: the scoped
-        # `git diff` carries the deletion, which may well be the change under review. Only an
-        # area hashes what is on disk, so only there is "git still lists it" invisible.
-        if mode != "project" and git("ls-files", "-z", "--cached", "--", p).strip(b"\0"):
+        # In `changes` mode the fingerprint is also the scoped diff against the base, and a
+        # deletion lives there and nowhere on disk — `rm`, `git rm`, `git mv`, or a commit
+        # since `--base`; it may be the very change under review. So ask the diff, not the
+        # index: the index still lists a file added and then removed, which no diff carries,
+        # and has already dropped one `git rm` deleted, which the diff does. Never for an
+        # unreadable path: that is reported below, and `git diff` cannot open it either.
+        if (mode != "project" and not unreadable(listed)
+                and git("diff", base or diff_base(), "--", *scoped([p])).strip()):
             continue
         # Why it is invisible decides what the operator should do about it, so the reasons
         # are told apart rather than guessed from `os.path.exists`. Calling an empty
@@ -416,8 +420,8 @@ def unseen_paths(paths, mode="changes"):
     return out
 
 
-def warn_unseen(paths, mode="changes"):
-    unseen = unseen_paths(paths, mode)
+def warn_unseen(paths, mode="changes", base=None):
+    unseen = unseen_paths(paths, mode, base)
     for p, why in unseen:
         print(f"warning: `{p}` {why} — it contributes nothing to the fingerprint, so changes "
               "to it will not make the review stale", file=sys.stderr)
@@ -963,7 +967,7 @@ def cmd_init(a):
                 "whose every gate is blind.", code=NO_CHANGES)
         print("warning: the scope is empty and --allow-empty was given; every gate is blind",
               file=sys.stderr)
-    warn_unseen(scope, a.mode)
+    warn_unseen(scope, a.mode, base)
     save(state)
     # The pinned id, as `status` prints it: the agent copies this into the reviewer's prompt,
     # and `HEAD~1` there names a different commit the moment anything is committed.
@@ -1075,7 +1079,7 @@ def cmd_scope(a):
     new = [x for x in dict.fromkeys(added) if x not in state["scope"]]
     if not new:
         die("every path given is already in scope")
-    warn_unseen(new, state.get("mode", "changes"))
+    warn_unseen(new, state.get("mode", "changes"), state.get("base"))
     before = fp_of(state)
     state["scope"] = state["scope"] + new
     state["fingerprint_current"] = fp_of(state)
