@@ -49,6 +49,7 @@ import hashlib
 import json
 import os
 import shlex
+import signal
 import stat
 import subprocess
 import sys
@@ -1164,7 +1165,15 @@ def cmd_validate(a):
     # state. Recording it against `before` would be worse: that state no longer exists.
     moved = before != after
     state["fingerprint_current"] = after
-    rec = {"cmd": cmd, "exit": r.returncode, "at": now(), "fingerprint": after}
+    # A process killed by signal N comes back as -N, and `sys.exit(-9)` left this script
+    # with status 247 while the record and the message said -9: three numbers for one run.
+    # The shell's own convention is 128+N, which is what `$?` shows and what a caller of
+    # "exits with its status" expects; the signal is kept beside it so the cause is named.
+    sig = -r.returncode if r.returncode < 0 else None
+    status = 128 + sig if sig else r.returncode
+    rec = {"cmd": cmd, "exit": status, "at": now(), "fingerprint": after}
+    if sig:
+        rec["signal"] = sig
     if moved:
         rec["moved_scope"] = True
         rec["fingerprint_before"] = before
@@ -1174,8 +1183,14 @@ def cmd_validate(a):
         print(f"loop-review: the command changed the scope ({before} -> {after}); this run is not "
               "evidence for either state — re-run it now that the files have settled",
               file=sys.stderr)
-    print(f"loop-review: validation {'GREEN' if r.returncode == 0 else 'RED'} (exit {r.returncode})")
-    sys.exit(r.returncode)
+    killed = ""
+    if sig:
+        try:
+            killed = f", killed by {signal.Signals(sig).name}"
+        except ValueError:
+            killed = f", killed by signal {sig}"
+    print(f"loop-review: validation {'GREEN' if status == 0 else 'RED'} (exit {status}{killed})")
+    sys.exit(status)
 
 
 def record_state(hits):
