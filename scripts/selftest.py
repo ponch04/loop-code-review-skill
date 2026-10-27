@@ -1313,6 +1313,28 @@ def the_abort_note_quotes_the_gate_and_never_counts_below_zero():
 
 
 @case
+def accept_never_calls_the_limit_spent_while_the_last_pass_is_open():
+    """`pass-start` appends the pass when it opens, so with the last allowed pass open the
+    count already equals the limit. `accept` read that as "report as INCOMPLETE" — and, with
+    nothing recorded, "every pass was aborted" — under the blocker saying the open pass can
+    still be recorded.
+    """
+    d = repo()
+    write(d, "a.py", "v2\n")
+    run("init", "--max-passes", "1", "--", "a.py", cwd=d, check=True)
+    run("validate", "--", "true", cwd=d)
+    run("pass-start", cwd=d, check=True)
+    out = run("accept", cwd=d).stdout
+    ok("opened but not recorded" in out and "limit reached" not in out and "aborted" not in out,
+       f"an open last pass is still a pass to record: {out.strip()[:240]}")
+    run("pass-record", "--score", "7", "--findings", "1", "--understood",
+        "--test-evidence", "trusted", cwd=d, check=True)
+    out = run("accept", cwd=d).stdout
+    ok("pass limit reached (1)" in out and "aborted" not in out,
+       f"once it is recorded and blocked, the limit is spent — and nothing was aborted: {out.strip()[:240]}")
+
+
+@case
 def accept_reports_the_pass_limit_even_when_every_pass_was_aborted():
     """The limit counts passes opened, so the hint must not depend on one being recorded.
 
