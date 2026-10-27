@@ -211,6 +211,21 @@ def die(msg, code=1):
     sys.exit(code)
 
 
+def read_text_or_die(path, label):
+    """A file the operator named, as UTF-8 text — or a refusal that says why, never a traceback.
+
+    `--task-brief-file` caught OSError only, and a brief saved in another encoding raised
+    UnicodeDecodeError (a ValueError) straight out of `init`.
+    """
+    try:
+        with open(path, encoding="utf-8") as f:
+            return f.read()
+    except UnicodeDecodeError as e:
+        die(f"{label} is not UTF-8 text (undecodable byte at offset {e.start}) — save it as UTF-8")
+    except OSError as e:
+        die(f"{label}: {e.strerror}")
+
+
 def read_json(path):
     """Parse one of this script's own JSON files. UTF-8, never the platform locale.
 
@@ -259,6 +274,9 @@ def load():
         return read_json(STATE_FILE)
     except ValueError as e:
         die(f"{STATE_FILE} is not valid JSON ({e}); run `reset` and start the loop again")
+    except OSError as e:
+        # A directory at the name, or a file this user may not read: say so, not a traceback.
+        die(f"{STATE_FILE} cannot be read ({e.strerror})")
 
 
 def save(state):
@@ -1049,17 +1067,22 @@ def read_task_brief(a):
     """
     if a.task_brief and a.task_brief_file:
         die("use --task-brief or --task-brief-file, not both")
+    # A blank value is refused like a blank file, not read as "none given". `--task-brief ""`
+    # from an empty variable started a loop with no brief in silence; beside `--scope-note`
+    # in `brief` it was dropped without a word, and in project mode it slipped past the
+    # refusal that names the flag, because a falsy value looked like no flag at all.
+    note = getattr(a, "scope_note", None)
+    if note is not None and not note.strip():
+        die("--scope-note is blank — say which hunks are task-owned, or leave the flag out")
     if a.task_brief_file:
-        try:
-            with open(a.task_brief_file, encoding="utf-8") as f:
-                text = f.read().strip()
-        except OSError as e:
-            die(f"--task-brief-file {a.task_brief_file}: {e.strerror}")
+        text = read_text_or_die(a.task_brief_file, f"--task-brief-file {a.task_brief_file}").strip()
         if not text:
             die(f"--task-brief-file {a.task_brief_file} is empty")
         return text
-    if a.task_brief:
-        return a.task_brief.strip() or None
+    if a.task_brief is not None:
+        if not a.task_brief.strip():
+            die("--task-brief is blank — give the requirements, or leave the flag out")
+        return a.task_brief.strip()
     return None
 
 
@@ -1970,6 +1993,9 @@ def load_project():
         return read_json(PROJECT_FILE)
     except ValueError as e:
         die(f"{PROJECT_FILE} is not valid JSON ({e})")
+    except OSError as e:
+        # A directory at the name, or a file this user may not read: say so, not a traceback.
+        die(f"{PROJECT_FILE} cannot be read ({e.strerror})")
 
 
 def open_loop_way_out(p):
