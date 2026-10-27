@@ -2507,6 +2507,42 @@ def multi_path_areas_are_one_area_with_a_bounded_slug():
 
 
 @case
+def a_findings_file_name_is_bounded_in_bytes_not_characters():
+    """The filesystem's limit is 255 *bytes*; the stem was cut at 80 characters.
+
+    80 emoji are 320 bytes, so an area of non-ASCII names got a findings path `open()`
+    refuses with ENAMETOOLONG — and in report-only that file is the whole deliverable, and
+    `project close` will not run without it.
+    """
+    names = ["\U0001F600" * 20 + str(i) for i in range(4)]       # 81 bytes each on disk
+    d = repo({f"{n}/f.py": "x\n" for n in names})
+    args = []
+    for n in names:
+        args += (["+"] if args else []) + [n]
+    run("project", "init", "--report-only", "--", *args, cwd=d, check=True)
+    out = run("project", "next", cwd=d, check=True).stdout
+    stem = out.split("findings file: ")[1].splitlines()[0]
+    base = os.fsencode(os.path.basename(stem))
+    ok(len(base) + len(b".prev") <= 255,
+       f"the findings name and its .prev rotation must fit 255 bytes, got {len(base)}")
+    try:
+        write_text(os.path.join(d, stem), "A. clean\n")
+        pass_through(d, "9.5", "0", "trusted")
+        r = run("project", "close", cwd=d)
+        ok(r.returncode == 0, f"and the area must close on it: {r.stderr.strip()[:200]}")
+    except OSError as e:
+        ok(False, f"the findings file could not even be written: {e}")
+
+    m = module()
+    ok(m.stem_within("a" * 90, 80) == "a" * 80, "an ASCII stem is cut exactly where it was")
+    for s in ("\u044f" * 50, "x" + "\U0001F600" * 30, "\udcff" * 90 + "\u044f" * 5):
+        cut = m.stem_within(s, 80)
+        raw = os.fsencode(cut)
+        ok(len(raw) <= 80 and s.startswith(cut) and os.fsdecode(raw) == cut,
+           f"a cut must fit the budget and never split a character: {cut!r}")
+
+
+@case
 def a_mistyped_path_inside_a_glued_area_is_reported():
     """Emptiness is asked of the area; a path inside one can still be invisible.
 

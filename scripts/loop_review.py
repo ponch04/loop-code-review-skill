@@ -1881,7 +1881,26 @@ def area_slug(x):
     # whose name is not valid UTF-8 crashed `project next` with a traceback instead of being
     # reviewed. `fsencode` round-trips them back to the original bytes.
     tail = hashlib.sha256(os.fsencode("\0".join(paths))).hexdigest()[:8]
-    return (stem[:80] if len(stem) > 80 else stem) + "-" + tail
+    return stem_within(stem, 80) + "-" + tail
+
+
+def stem_within(stem, budget):
+    """`stem` cut to at most `budget` *bytes* on disk, never inside a character.
+
+    The limit is the filesystem's, and it counts bytes: 80 characters of CJK or emoji are up
+    to 320, so the old character slice produced a name `open()` refused with ENAMETOOLONG
+    once `-<hash>.prev.md` was added. Cut the encoded form (fsencode, so a non-UTF-8 name's
+    raw bytes count as themselves), back off any UTF-8 continuation bytes so a multi-byte
+    character is dropped whole rather than split, and decode it the same way. A name of
+    ASCII is cut exactly where it always was, so existing findings files keep their names.
+    """
+    raw = os.fsencode(stem)
+    if len(raw) <= budget:
+        return stem
+    cut = budget
+    while cut > 0 and (raw[cut] & 0xC0) == 0x80:
+        cut -= 1
+    return os.fsdecode(raw[:cut])
 
 
 def check_glue(raw):
