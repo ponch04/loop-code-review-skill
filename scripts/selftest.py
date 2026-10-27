@@ -3469,6 +3469,37 @@ def only_a_missing_argument_excuses_a_recommended_command():
 
 
 @case
+def project_init_force_never_discards_a_ledger_whose_area_lost_its_loop():
+    """`project init --force` asked about an open `state.json` only.
+
+    With the area's loop state lost, nothing stood in the way: the ledger, with every
+    finished area's outcome, was replaced by a fresh queue — what evals 14 and 15 forbid,
+    since `project close --force` is the recovery that keeps them. The refusal must name a
+    way out that works there, and starting over must still be possible on purpose.
+    """
+    d = repo({"a/x.py": "1\n", "b/y.py": "2\n"})
+    run("project", "init", "--report-only", "--", "a", "b", cwd=d, check=True)
+    run("project", "next", cwd=d, check=True)
+    pass_through(d, "9.5", "0", "trusted")
+    findings(d, "a", "A. clean\n")
+    run("project", "close", cwd=d, check=True)
+    run("project", "next", cwd=d, check=True)                   # `b`, then its state is lost
+    os.remove(os.path.join(d, ".loop-review", "state.json"))
+    r = run("project", "init", "--force", "--", "a", "b", cwd=d)
+    led = read_state(d, "project.json")
+    ok(r.returncode != 0 and "loop state is gone" in r.stderr and "project close --force" in r.stderr,
+       f"init --force must refuse over a stuck area: rc={r.returncode} {r.stderr.strip()[:200]}")
+    ok(led["areas"][0]["status"] == "reviewed", "and leave the finished area's outcome in place")
+    ok(run("project", "close", "--force", cwd=d).returncode == 0
+       and run("project", "next", cwd=d).returncode == 0,
+       "the named recovery works there and the queue continues")
+
+    r = run("project", "init", "--force", "--", "a", "b", cwd=d)  # deliberate start-over
+    ok(r.returncode == 0 and "discarded 2 recorded area outcome(s)" in r.stderr,
+       f"a deliberate --force still starts over, and says what it cost: {r.stderr.strip()[:200]}")
+
+
+@case
 def a_recommended_recovery_works_in_the_state_that_printed_it():
     """Parsing a recommendation only proves the flags exist. Running it proves it is a way out.
 
