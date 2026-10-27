@@ -3349,10 +3349,17 @@ def prose_hits(text):
     """`(line, body)` for every invocation in a document's text."""
     text = text.replace("\\\n", " ")                         # fenced line continuations
     # An inline span wrapped across a line — `project close\n  --force` — was cut in two by
-    # splitlines(), no half held a backtick pair, and the flag went unparsed. Join a span's
-    # single line break first; fenced blocks (```) are left alone.
-    text = re.sub(r"(?<!`)`([^`\n]+)\n\s*([^`\n]+)`(?!`)",
-                  lambda m: f"`{m.group(1)} {m.group(2)}`", text)
+    # splitlines(), no half held a backtick pair, and the flag went unparsed. Spans are
+    # matched in order from the start, as Markdown pairs them, fenced blocks skipped, and a
+    # line break is collapsed only *inside* one. A regex joining "`…\n…`" anywhere paired
+    # the closing backtick of one span with the opening one of the next, hiding exactly
+    # the wrapped span it was for; a blank line ends a paragraph, so it ends no span.
+    def join(m):
+        body = m.group(1)
+        if body is None or re.search(r"\n\s*\n", body):
+            return m.group(0)
+        return "`" + re.sub(r"\s*\n\s*", " ", body) + "`"
+    text = re.sub(r"```.*?```|(?<!`)`([^`]+)`(?!`)", join, text, flags=re.S)
     out = []
     for raw in text.splitlines():
         line = raw.strip().lstrip("#").strip()
@@ -3420,16 +3427,18 @@ def assert_invocations_parse(lines, failures=None):
             if " ".join(tokens) not in SUBCOMMANDS:
                 failures.append(f"{rel}: `{raw}` names no such subcommand")
             continue
-        tokens = [PLACEHOLDERS.get(tokens[i - 1], t) if t == "..." and i else t
+        # A placeholder is `...`, `ARG` (from `<...>` or an f-string interpolation) or an
+        # all-caps word as the help writes them (`--findings N`). After a flag with choices it
+        # takes that flag's accepted value, whichever form it has; anywhere else it is also
+        # tried as a number. The CLI has no upper-case choice or subcommand to mistake.
+        def placeholder(t):
+            return t == "..." or re.fullmatch(r"[A-Z][A-Z_]*", t) is not None
+        tokens = [PLACEHOLDERS.get(tokens[i - 1], t) if i and placeholder(t) else t
                   for i, t in enumerate(tokens)]
         fill = [PLACEHOLDERS[tokens[-1]]] if tokens[-1] in PLACEHOLDERS else ["ARG"]
-        # An all-caps word after a flag is a placeholder, as the help writes them
-        # (`--findings N`, `--score S`); a typed flag rejects the word, so try it as a number.
-        # Every placeholder — `ARG` from `<...>` or an interpolation, or an all-caps word as
-        # the help writes them (`--findings N`) — tried as a number wherever it stands: the
-        # CLI has no upper-case choice or subcommand that this could mistake for one.
-        numbered = ["1" if re.fullmatch(r"[A-Z][A-Z_]*", t) else t for t in tokens]
-        for attempt in (tokens, tokens + fill, tokens + ["1"], numbered, numbered + fill):
+        numbered = ["1" if placeholder(t) else t for t in tokens]
+        for attempt in (tokens, tokens + fill, tokens + ["1"], numbered, numbered + fill,
+                        numbered + ["1"]):
             buf = _io.StringIO()
             try:
                 with contextlib.redirect_stderr(buf), contextlib.redirect_stdout(buf):
@@ -3823,16 +3832,22 @@ def the_invocation_collector_sees_every_form_a_recommendation_takes():
     found = []
     assert_invocations_parse([("planted", "x", "pass-record --findings N"),
                               ("planted", "y", "resolve --fixed ARG"),
+                              ("planted", "v", "amend --test-evidence VERDICT"),
+                              ("planted", "w", "amend --test-evidence ARG"),
                               ("planted", "z", "reset --frce")], found)
     ok(len(found) == 1 and "`z`" in found[0],
        f"placeholders parse wherever they stand, a dead flag does not: {found}")
+    bodies = [b for _, b in prose_hits("Never `reset` inside an area: `project close` frees it.\n"
+                                       "If it is foreign — `project\nclose --frce` settles it, "
+                                       "and `reset` then\nfrees it.")]
+    ok("project close --frce" in bodies,
+       f"a wrapped span after a line with other spans is still joined: {bodies}")
     found = [b for _, _, b in evals_hits([{"id": 0, "prompt": "Run `project close\n  --frce` "
                                            "and then `init`\nlater text `x`"}])]
     ok("project close --frce" in found and not any("later" in b for b in found),
        f"an eval field is read line by line, a wrapped span joined: {found}")
 
 
-@case
 @case
 def the_second_passport_name_stays_a_link_never_a_copy():
     """One passport, two runtime names — and the difference is load-bearing.
