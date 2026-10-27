@@ -2683,26 +2683,45 @@ def command_hits(line):
 
 
 def script_message_lines():
-    """Every invocation the script *tells the operator to run*, from its own die()/print().
+    """Every invocation the script *tells the operator to run*: every string it can print.
 
     A message naming a command that does not exist is the same dead end as prose naming one,
     and it is worse hidden: `cmd_project_close` advised `reset --force` for months, a flag
     `reset` never had, while the only other route out of that state was refused as well.
     Messages are prose too — they are read by the agent and are part of the CLI's contract.
+
+    Every string constant in the module, not the arguments of die()/print() alone. Most
+    messages are built before they are printed — the reasons `blockers()` and
+    `review_integrity()` return, the `tail` and `advice` of `validate-drop`, the hints passed
+    as arguments — and that scan saw 49 of 113 recommendations; `amend --test-evidence ...`
+    in an acceptance blocker was among the unseen. Docstrings are the exception: they explain
+    the code, quoting past dead ends by name, and `--help` has a case of its own.
     """
     src = read_text(os.path.join(ROOT, "scripts", "loop_review.py"))
+    tree = ast.parse(src)
+    docstrings = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.FunctionDef, ast.ClassDef)) and node.body:
+            first = node.body[0]
+            if (isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant)
+                    and isinstance(first.value.value, str)):
+                docstrings.add(id(first.value))
     out = []
-    for node in ast.walk(ast.parse(src)):
-        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-                and node.func.id in ("die", "print")):
-            continue
-        for arg in ast.walk(node):
-            # f-strings contribute their literal parts; an interpolated value is not a
-            # command name, so dropping it cannot hide one.
-            if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
-                for body in command_hits(arg.value):
-                    out.append((f"scripts/loop_review.py:{node.lineno}", arg.value.strip(), body))
+    for node in ast.walk(tree):
+        # f-strings contribute their literal parts; an interpolated value is not a command
+        # name, so dropping it cannot hide one.
+        if (isinstance(node, ast.Constant) and isinstance(node.value, str)
+                and id(node) not in docstrings):
+            for body in command_hits(node.value):
+                out.append((f"scripts/loop_review.py:{node.lineno}", node.value.strip(), body))
     return out
+
+
+# A value a message may leave as a placeholder (`...`, or nothing after the flag), filled in
+# with one the parser accepts. A word or a number satisfies a free-text or typed flag; a flag
+# with `choices` rejects both, so it needs its own — and a flag missing from this table reads
+# as a broken recommendation, which is the safe direction.
+PLACEHOLDERS = {"--test-evidence": "trusted"}
 
 
 def doc_command_lines():
@@ -2746,7 +2765,10 @@ def assert_invocations_parse(lines):
             if " ".join(tokens) not in SUBCOMMANDS:
                 FAILURES.append(f"{rel}: `{raw}` names no such subcommand")
             continue
-        for attempt in (tokens, tokens + ["ARG"], tokens + ["1"]):
+        tokens = [PLACEHOLDERS.get(tokens[i - 1], t) if t == "..." and i else t
+                  for i, t in enumerate(tokens)]
+        fill = [PLACEHOLDERS[tokens[-1]]] if tokens[-1] in PLACEHOLDERS else ["ARG"]
+        for attempt in (tokens, tokens + fill, tokens + ["1"]):
             buf = _io.StringIO()
             try:
                 with contextlib.redirect_stderr(buf), contextlib.redirect_stdout(buf):
