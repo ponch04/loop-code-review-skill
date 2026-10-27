@@ -177,8 +177,20 @@ def to_repo_relative(path, root):
     """
     rel = os.path.relpath(os.path.abspath(path), root)
     if rel.split(os.sep)[0] == os.pardir:
-        # cwd or root may be reached through a symlink; compare resolved paths too.
-        rel = os.path.relpath(os.path.realpath(path), os.path.realpath(root))
+        # cwd or root may be reached through a symlink; compare resolved paths too. Resolve
+        # the directories only: `realpath` of the whole path also follows the last component,
+        # so `init -- /via/link/CLAUDE.md` scoped `AGENTS.md` — the link's target, which git
+        # tracks separately and the dedupe then merged away — and a link pointing outside
+        # the repository was refused as "outside" although the link itself lies inside.
+        # But only when the last component is an entry *of* the repository — its resolved
+        # parent lies inside the root. A link from outside into the repository (`/via/repo`
+        # pointing at the root, or at a directory in it) is an entry point, not an entry,
+        # and resolving it whole is what makes `init -- /via/repo` mean `.`.
+        real_root = os.path.realpath(root)
+        head, tail = os.path.split(os.path.abspath(path))
+        inside = os.path.relpath(os.path.realpath(head), real_root).split(os.sep)[0] != os.pardir
+        target = os.path.join(os.path.realpath(head), tail) if inside else os.path.realpath(path)
+        rel = os.path.relpath(target, real_root)
     if rel.split(os.sep)[0] == os.pardir:
         die(f"path is outside the repository: {path}")
     return rel.replace(os.sep, "/")
