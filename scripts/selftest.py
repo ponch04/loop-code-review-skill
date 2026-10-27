@@ -3363,6 +3363,23 @@ SUBCOMMANDS = ("init", "validate-drop", "validate", "pass-start", "pass-abort", 
                "project init", "project next", "project close", "project status", "reset")
 
 
+def cli_surface(p, prefix=""):
+    """`{subcommand: its flags}` for every leaf subcommand of `p`, flags or not.
+
+    It recorded a subcommand only when it had a flag besides `-h`, so `scope`, `accept`,
+    `fingerprint` and `project next` were never in it — and "not described at all", asked
+    only of what it held, could not be asked of them.
+    """
+    out, subs = {}, [a for a in p._actions if a.__class__.__name__ == "_SubParsersAction"]
+    for act in subs:
+        for name, sub in act.choices.items():
+            out.update(cli_surface(sub, (prefix + " " + name).strip()))
+    if not subs and prefix:                          # a leaf: a command one can run
+        out[prefix] = {o for a in p._actions for o in a.option_strings
+                       if o not in ("-h", "--help")}   # `-h` alone is not a documented flag
+    return out
+
+
 def command_hits(line):
     """Invocations named in one line of prose or one message string, normalised for parsing.
 
@@ -3881,17 +3898,13 @@ def the_builtin_help_lists_every_flag_the_parser_accepts():
     entries = docstring_signatures()
     parser = module().build_parser()
 
-    def declared(p, prefix=""):
-        out = {}
-        for act in p._actions:
-            if act.__class__.__name__ == "_SubParsersAction":
-                for name, sub in act.choices.items():
-                    out.update(declared(sub, (prefix + " " + name).strip()))
-            else:
-                opts = {o for o in act.option_strings if o not in ("-h", "--help")}
-                if opts:                      # `-h` alone is not a documented flag
-                    out.setdefault(prefix, set()).update(opts)
-        return out
+    declared = cli_surface
+    # The hand-kept list the prose checks recognise commands by is the parser's, exactly:
+    # a subcommand missing from it is one no document or message is ever checked for.
+    ok(set(SUBCOMMANDS) == set(declared(parser)),
+       f"SUBCOMMANDS must be the parser's subcommands: only in SUBCOMMANDS "
+       f"{sorted(set(SUBCOMMANDS) - set(declared(parser)))}, only in the parser "
+       f"{sorted(set(declared(parser)) - set(SUBCOMMANDS))}")
 
     missing, invented = [], []
     surface = declared(parser)
