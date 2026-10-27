@@ -939,6 +939,23 @@ def cmd_init(a):
     if not a.paths:
         die("init needs at least one task-owned path after `--`")
     root = repo_root()
+    # Project mode refuses these flags whatever their value, so it is asked first: a blank
+    # `--task-brief ""` was told to "give the requirements", and the operator who did was
+    # then refused for the mode. Presence is `is not None` — an empty value was typed.
+    if (a.task_brief is not None or a.task_brief_file is not None) and a.mode == "project":
+        # An inherited area has no task and therefore no acceptance criteria to miss;
+        # a brief here would only be the operator's opinion smuggled past isolation.
+        named = [f for f in brief_flags_given(a) if f != "--scope-note"]
+        die(" and ".join(named) + " applies to --mode changes only")
+    if a.scope_note is not None and a.mode == "project":
+        # A scope note says which hunks of a scoped file are task-owned. An area has no
+        # task-owned hunks: everything under its paths is in scope, which is what project
+        # mode means. `reviewer-prompt-area.md` has no field for one, so a note recorded
+        # here reaches nobody — while `status` still tells the agent to "repeat it verbatim
+        # in the reviewer's hunk fields", inviting a third channel across the isolation
+        # boundary. `brief` refuses it; init accepted it, and one of the two had to be wrong.
+        die("--scope-note applies to --mode changes only: an inherited area has no "
+            "task-owned hunks, every file under it is in scope")
     # Path arguments arrive absolute (see `user_path`), so reading the brief here rather
     # than after the chdir is no longer what keeps it correct — it just keeps the failure
     # early, before a loop is written.
@@ -970,20 +987,6 @@ def cmd_init(a):
                 "`project close --force` settles it `incomplete` and the queue continues with "
                 "`project next`. A loop started here would be read as that area's; `--force` "
                 "does not cover that.")
-    if (a.task_brief or a.task_brief_file) and a.mode == "project":
-        # An inherited area has no task and therefore no acceptance criteria to miss;
-        # a brief here would only be the operator's opinion smuggled past isolation.
-        named = [f for f in brief_flags_given(a) if f != "--scope-note"]
-        die(" and ".join(named) + " applies to --mode changes only")
-    if a.scope_note and a.mode == "project":
-        # A scope note says which hunks of a scoped file are task-owned. An area has no
-        # task-owned hunks: everything under its paths is in scope, which is what project
-        # mode means. `reviewer-prompt-area.md` has no field for one, so a note recorded
-        # here reaches nobody — while `status` still tells the agent to "repeat it verbatim
-        # in the reviewer's hunk fields", inviting a third channel across the isolation
-        # boundary. `brief` refuses it; init accepted it, and one of the two had to be wrong.
-        die("--scope-note applies to --mode changes only: an inherited area has no "
-            "task-owned hunks, every file under it is in scope")
     base = None
     if a.base:
         if a.mode == "project":
@@ -1051,7 +1054,8 @@ def brief_flags_given(a):
     """
     return [flag for flag, used in (("--task-brief", a.task_brief),
                                     ("--task-brief-file", getattr(a, "task_brief_file", None)),
-                                    ("--scope-note", getattr(a, "scope_note", None))) if used]
+                                    ("--scope-note", getattr(a, "scope_note", None)))
+            if used is not None]
 
 
 def read_task_brief(a):
@@ -1065,7 +1069,9 @@ def read_task_brief(a):
     This is requirements only. Author rationale, suspected issues and proposed fixes stay
     out of it — they are what reviewer isolation exists to withhold.
     """
-    if a.task_brief and a.task_brief_file:
+    if a.task_brief is not None and a.task_brief_file is not None:
+        # `is not None`: a blank `--task-brief ""` beside a file was falsy, skipped this, and
+        # the file's text was used as if the other flag had never been typed.
         die("use --task-brief or --task-brief-file, not both")
     # A blank value is refused like a blank file, not read as "none given". `--task-brief ""`
     # from an empty variable started a loop with no brief in silence; beside `--scope-note`

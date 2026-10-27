@@ -2633,13 +2633,21 @@ def the_operators_files_and_values_are_refused_by_name_not_by_traceback():
     r = run("init", "--task-brief-file", "brief.txt", "--", "a.py", cwd=d)
     ok(r.returncode == 1 and "is not UTF-8 text" in r.stderr and "Traceback" not in r.stderr,
        f"a non-UTF-8 brief file is refused by name: rc={r.returncode} {r.stderr.strip()[-160:]}")
-    for args, flag in ((("init", "--task-brief", "", "--", "a.py"), "--task-brief"),
-                       (("init", "--task-brief", "   ", "--", "a.py"), "--task-brief"),
-                       (("init", "--scope-note", "", "--", "a.py"), "--scope-note"),
-                       (("init", "--mode", "project", "--task-brief", "", "--", "a.py"), "--task-brief")):
+    write_text(os.path.join(d, "ok.txt"), "a.py must end with v2\n")
+    for args, why in ((("init", "--task-brief", "", "--", "a.py"), "--task-brief is blank"),
+                      (("init", "--task-brief", "   ", "--", "a.py"), "--task-brief is blank"),
+                      (("init", "--scope-note", "", "--", "a.py"), "--scope-note is blank"),
+                      (("init", "--task-brief", "", "--task-brief-file", "ok.txt", "--", "a.py"),
+                       "not both"),
+                      # In project mode the flag itself is wrong, whatever its value: "blank,
+                      # give the requirements" sent the operator to a value refused next.
+                      (("init", "--mode", "project", "--task-brief", "", "--", "a.py"),
+                       "--task-brief applies to --mode changes only"),
+                      (("init", "--mode", "project", "--scope-note", "", "--", "a.py"),
+                       "--scope-note applies to --mode changes only")):
         r = run(*args, cwd=d)
-        ok(r.returncode != 0 and f"{flag} is blank" in r.stderr,
-           f"`{' '.join(map(repr, args))}` must not start a loop without a word: "
+        ok(r.returncode != 0 and why in r.stderr,
+           f"`{' '.join(map(repr, args))}` must be refused ({why}): "
            f"rc={r.returncode} {r.stderr.strip()[:160]}")
     ok(not os.path.exists(os.path.join(d, ".loop-review", "state.json")), "and none of them did")
 
@@ -2647,6 +2655,15 @@ def the_operators_files_and_values_are_refused_by_name_not_by_traceback():
     r = run("brief", "--task-brief", "", "--scope-note", "only the parser", cwd=d)
     ok(r.returncode != 0 and "--task-brief is blank" in r.stderr and read_state(d).get("scope_note") is None,
        f"brief must not drop a blank brief and record the note anyway: {r.stderr.strip()[:160]}")
+
+    p = repo({"pkg/a.py": "x\n"})                                # a project loop: name the flags
+    run("project", "init", "--", "pkg", cwd=p, check=True)
+    run("project", "next", cwd=p, check=True)
+    for args, named in ((("brief", "--task-brief", ""), "--task-brief"),
+                        (("brief", "--task-brief", "", "--scope-note", "x"), "--task-brief and --scope-note")):
+        r = run(*args, cwd=p)
+        ok(r.returncode != 0 and r.stderr.split("loop-review: ")[-1].startswith(named + ":"),
+           f"`{' '.join(map(repr, args))}` must name every flag given, blank or not: {r.stderr.strip()[:160]}")
 
     sf = os.path.join(d, ".loop-review", "state.json")
     os.remove(sf)
