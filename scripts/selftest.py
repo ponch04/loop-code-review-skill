@@ -556,6 +556,45 @@ def project_next_creates_the_findings_directory():
 
 
 @case
+def a_review_of_a_state_the_files_moved_past_is_not_recorded():
+    """SKILL.md step 3 says so, and `pass-record` never checked.
+
+    An edit while the reviewer read — the user, a formatter, a checkout — left the open pass
+    bound to a state that no longer exists, and `pass-record` filed its verdict anyway, with
+    `fingerprint_current` stale behind it. The refusal names `pass-abort`, and that must be
+    a way out in exactly this state.
+    """
+    d = repo({"src/a.py": "1\n"})
+    write(d, "src/a.py", "2\n")
+    out = run("init", "--", "src", cwd=d, check=True)
+    run("validate", "--", "true", cwd=d)
+    run("pass-start", cwd=d, check=True)
+    opened = read_state(d)["passes"][-1]["fingerprint"]
+    write(d, "src/a.py", "3\n")                                 # moved mid-review
+    r = run("pass-record", "--score", "9", "--findings", "0", "--understood",
+            "--test-evidence", "trusted", cwd=d)
+    st = read_state(d)
+    ok(r.returncode != 0 and "moved while pass 1 was being reviewed" in r.stderr
+       and "pass-abort" in r.stderr,
+       f"a review of a vanished state must be refused toward pass-abort: rc={r.returncode} "
+       f"{r.stderr.strip()[:200]}")
+    ok(st["passes"][-1]["result"] is None and st["fingerprint_current"] != opened,
+       "nothing recorded, and the current fingerprint brought up to date")
+    ok(run("pass-abort", "--reason", "scope moved mid-review", cwd=d).returncode == 0,
+       "the named way out works in that state")
+    run("validate", "--", "true", cwd=d)
+    ok(run("pass-start", cwd=d).returncode == 0, "and a fresh pass opens on what is there now")
+
+    d = repo({"src/a.py": "1\n", "lib/b.py": "1\n"})          # scope -- before any review
+    write(d, "src/a.py", "2\n")
+    write(d, "lib/b.py", "2\n")
+    run("init", "--", "src", cwd=d, check=True)
+    out = run("scope", "--", "lib", cwd=d, check=True).stdout
+    ok("stale" not in out and "first pass" in out,
+       f"with no review yet, nothing is stale: {out.strip()[:200]}")
+
+
+@case
 def a_stale_pass_can_be_aborted_without_inventing_a_result():
     d = repo()
     write(d, "a.py", "v2\n")

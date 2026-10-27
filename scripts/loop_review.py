@@ -1089,8 +1089,14 @@ def cmd_scope(a):
     for x in new:
         print(f"  + {x}")
     if state["fingerprint_current"] != before:
-        print("the reviewed state moved; the last review is now stale — re-validate and open "
-              "a new pass so a reviewer actually sees the added paths")
+        # "The last review is stale" is only true when there is one; before the first pass the
+        # same move just means the first reviewer must see the wider scope.
+        if last_recorded_pass(state) is not None:
+            print("the reviewed state moved; the last review is now stale — re-validate and "
+                  "open a new pass so a reviewer actually sees the added paths")
+        else:
+            print("the scope moved before any review was recorded — validate the new state; "
+                  "the first pass will cover the added paths")
 
 
 def check_none_or_command(a, verb, empty_hint, reason_needs_none=False):
@@ -1528,6 +1534,18 @@ def cmd_pass_record(a):
         die("no open pass to record; `pass-start` opens one")
     if lp.get("result") is not None:
         die(f"pass {lp['n']} is already recorded; use `amend` to add output the reviewer supplied afterwards")
+    # SKILL.md step 3: a review of a state the files have moved past is not recorded. The
+    # script never asked, so `pass-record` filed a verdict about code that no longer exists
+    # as the pass of the state it found — and left `fingerprint_current` stale behind it.
+    # `scope --` cannot move it any more (it refuses while a pass is open); an edit, a
+    # formatter or a checkout still can.
+    state["fingerprint_current"] = fp_of(state)
+    if state["fingerprint_current"] != lp["fingerprint"]:
+        save(state)
+        die(f"the scoped files moved while pass {lp['n']} was being reviewed "
+            f"({lp['fingerprint']} -> {state['fingerprint_current']}); that review is of a state "
+            "that no longer exists — `pass-abort --reason \"scope moved mid-review\"` discards it, "
+            "and a fresh reviewer reviews what is there now")
     if a.findings < 0:
         # `unresolved = findings - resolved` feeds blockers(); a negative count would read
         # as "already resolved" and pass exit condition 2 without a single fix.
