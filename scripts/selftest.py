@@ -2622,6 +2622,63 @@ def an_interrupted_or_unwritable_validation_records_nothing_and_says_so():
 
 
 @case
+def the_operators_files_and_values_are_refused_by_name_not_by_traceback():
+    """A brief file in another encoding, a state file that cannot be opened, and a blank
+    brief or scope note — each was a traceback or a silent "none given".
+    """
+    d = repo()
+    write(d, "a.py", "v2\n")
+    with open(os.path.join(d, "brief.txt"), "wb") as f:
+        f.write("Anforderung: Größe\n".encode("latin-1"))
+    r = run("init", "--task-brief-file", "brief.txt", "--", "a.py", cwd=d)
+    ok(r.returncode == 1 and "is not UTF-8 text" in r.stderr and "Traceback" not in r.stderr,
+       f"a non-UTF-8 brief file is refused by name: rc={r.returncode} {r.stderr.strip()[-160:]}")
+    write_text(os.path.join(d, "ok.txt"), "a.py must end with v2\n")
+    for args, why in ((("init", "--task-brief", "", "--", "a.py"), "--task-brief is blank"),
+                      (("init", "--task-brief", "   ", "--", "a.py"), "--task-brief is blank"),
+                      (("init", "--scope-note", "", "--", "a.py"), "--scope-note is blank"),
+                      (("init", "--task-brief", "", "--task-brief-file", "ok.txt", "--", "a.py"),
+                       "not both"),
+                      # In project mode the flag itself is wrong, whatever its value: "blank,
+                      # give the requirements" sent the operator to a value refused next.
+                      (("init", "--mode", "project", "--task-brief", "", "--", "a.py"),
+                       "--task-brief applies to --mode changes only"),
+                      (("init", "--mode", "project", "--scope-note", "", "--", "a.py"),
+                       "--scope-note applies to --mode changes only")):
+        r = run(*args, cwd=d)
+        ok(r.returncode != 0 and why in r.stderr,
+           f"`{' '.join(map(repr, args))}` must be refused ({why}): "
+           f"rc={r.returncode} {r.stderr.strip()[:160]}")
+    ok(not os.path.exists(os.path.join(d, ".loop-review", "state.json")), "and none of them did")
+
+    run("init", "--", "a.py", cwd=d, check=True)
+    r = run("brief", "--task-brief", "", "--scope-note", "only the parser", cwd=d)
+    ok(r.returncode != 0 and "--task-brief is blank" in r.stderr and read_state(d).get("scope_note") is None,
+       f"brief must not drop a blank brief and record the note anyway: {r.stderr.strip()[:160]}")
+
+    p = repo({"pkg/a.py": "x\n"})                                # a project loop: name the flags
+    run("project", "init", "--", "pkg", cwd=p, check=True)
+    run("project", "next", cwd=p, check=True)
+    for args, named in ((("brief", "--task-brief", ""), "--task-brief"),
+                        (("brief", "--task-brief", "", "--scope-note", "x"), "--task-brief and --scope-note")):
+        r = run(*args, cwd=p)
+        ok(r.returncode != 0 and r.stderr.split("loop-review: ")[-1].startswith(named + ":"),
+           f"`{' '.join(map(repr, args))}` must name every flag given, blank or not: {r.stderr.strip()[:160]}")
+
+    sf = os.path.join(d, ".loop-review", "state.json")
+    os.remove(sf)
+    os.makedirs(sf)
+    r = run("status", cwd=d)
+    ok(r.returncode == 1 and "cannot be read" in r.stderr and "Traceback" not in r.stderr,
+       f"a state file that cannot be opened is named: {r.stderr.strip()[-160:]}")
+    os.rmdir(sf)
+    os.makedirs(os.path.join(d, ".loop-review", "project.json"))
+    r = run("project", "status", cwd=d)
+    ok(r.returncode == 1 and "cannot be read" in r.stderr and "Traceback" not in r.stderr,
+       f"so is a ledger that cannot be opened: {r.stderr.strip()[-160:]}")
+
+
+@case
 def argument_values_are_validated():
     d = repo()
     write(d, "a.py", "v2\n")
