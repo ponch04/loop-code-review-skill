@@ -899,8 +899,41 @@ def a_run_that_moved_the_scope_cannot_make_a_later_failure_read_as_regressed():
     ok("changed the scope" in r.stderr, f"the fixture must produce a moved-scope run: {r.stderr[:160]}")
     run("validate", "--", check, cwd=d)                    # now red, scope settled
     out = run("pass-start", cwd=d, check=True).stdout + run("status", cwd=d, check=True).stdout
-    ok("[inherited]" in out and "[regressed]" not in out,
+    # Not `[regressed]` — the voided green proves nothing. (Nor `[inherited]`: the check's
+    # own marker moved the area, so its red run is not on the area as opened.)
+    ok("[regressed]" not in out and "-> exit 1  [" in out,
        f"a moved-scope run must not count as this check having been green: {out}")
+
+
+@case
+def a_red_check_is_labelled_only_where_the_label_is_true():
+    """`[inherited]` claims the area as opened already failed the check.
+
+    It was printed in task mode, where the reviewer prompt asks for bare lines and there is
+    no inherited area; on a 126/127, which is evidence about nothing; and on a check first
+    run after the area had been edited, which nothing showed had ever failed before.
+    """
+    d = repo()
+    write(d, "a.py", "v2\n")
+    run("init", "--", "a.py", cwd=d, check=True)
+    run("validate", "--", "false", cwd=d)
+    out = run("status", cwd=d, check=True).stdout
+    ok("-> exit 1\n" in out and "[inherited]" not in out and "[regressed]" not in out,
+       f"task mode prints bare lines: {out.strip()[-200:]}")
+
+    d = repo({"pkg/a.py": "x\n"})
+    run("project", "init", "--", "pkg", cwd=d, check=True)
+    run("project", "next", cwd=d, check=True)
+    run("validate", "--", "nosuchtool --x", cwd=d)               # 127 on the area as opened
+    run("validate", "--", "false", cwd=d)                        # red on the area as opened
+    out = run("status", cwd=d, check=True).stdout
+    ok("nosuchtool --x  -> exit 127  [never ran]" in out and "false  -> exit 1  [inherited]" in out,
+       f"a check that never started is not inherited; one red as opened is: {out.strip()[-240:]}")
+    write(d, "pkg/a.py", "y\n")                                 # the area changes
+    run("validate", "--", "test -z yes", cwd=d)                  # first run only now, red
+    out = run("status", cwd=d, check=True).stdout
+    ok("test -z yes  -> exit 1  [first run after the area changed]" in out,
+       f"a check first run after the change is not called inherited: {out.strip()[-240:]}")
 
 
 @case
