@@ -353,6 +353,32 @@ def init_refuses_over_an_area_whose_loop_state_is_gone():
 
 
 @case
+def a_tracked_file_deleted_on_disk_is_warned_about_only_where_it_is_invisible():
+    """`git ls-files --cached` lists a file `rm` deleted without `git rm`.
+
+    In project mode the fingerprint hashes the disk, so that path is invisible and must be
+    warned about — it was not: the index said "seen". In changes mode the scoped diff carries
+    the deletion, which may be the very change under review, so the warning that it
+    "contributes nothing to the fingerprint" would be false — and it was printed there.
+    """
+    d = repo({"pkg/a.py": "x\n", "gone.py": "y\n"})
+    os.remove(os.path.join(d, "gone.py"))
+    r = run("project", "init", "--allow-empty", "--", "pkg", "gone.py", cwd=d)
+    ok("`gone.py` does not exist on disk" in r.stderr,
+       f"project mode must warn that the deleted path is invisible: {r.stderr.strip()[:200]}")
+
+    d = repo({"pkg/a.py": "x\n", "gone.py": "y\n"})
+    os.remove(os.path.join(d, "gone.py"))                     # the task deletes a file
+    r = run("init", "--", "gone.py", cwd=d, check=True)
+    ok("gone.py" not in r.stderr,
+       f"changes mode: the deletion is in the diff, so no warning: {r.stderr.strip()[:200]}")
+    before = read_state(d)["fingerprint_current"]
+    write(d, "gone.py", "y\n")                                # restoring it undoes the change
+    ok(run("fingerprint", cwd=d, check=True).stdout.strip() != before,
+       "and the deletion is in fact what the fingerprint hashes")
+
+
+@case
 def an_area_is_what_can_be_read_from_disk_not_what_git_lists():
     """Emptiness asked git's index, and the index is not the disk.
 
