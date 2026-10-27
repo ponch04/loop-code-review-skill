@@ -1339,6 +1339,59 @@ def report_only_close_accepts_a_pass_that_was_properly_aborted():
 
 
 @case
+def reset_survives_odd_shapes_and_says_why_the_directory_stays():
+    """`reset` is the way out of a broken loop, so it must not break on one.
+
+    It asked `os.path.exists` and then `os.remove`d: a dangling symlink at `state.json`
+    (exists() is False, so the link stayed) and a directory at `state.json.tmp` (os.remove
+    raised IsADirectoryError, a traceback). And after `reset --project` the kept findings
+    reports counted as "ours", so `.loop-review/` survived without a word — while SKILL.md
+    has the agent name that directory in the report.
+    """
+    d = repo({"pkg/a.py": "x\n"})
+    run("project", "init", "--report-only", "--", "pkg", cwd=d, check=True)
+    run("project", "next", cwd=d, check=True)
+    pass_through(d, "9.5", "0", "trusted")
+    findings(d, "pkg", "A. clean\n")
+    run("project", "close", cwd=d, check=True)
+    sd = os.path.join(d, ".loop-review")
+    os.symlink("nowhere.json", os.path.join(sd, "state.json"))     # dangling
+    os.makedirs(os.path.join(sd, "state.json.tmp"))                 # a directory at the name
+    r = run("reset", "--project", cwd=d)
+    ok(r.returncode == 0 and "Traceback" not in r.stderr,
+       f"reset must not crash on a link or a directory: rc={r.returncode} {r.stderr.strip()[-200:]}")
+    ok(not os.path.lexists(os.path.join(sd, "state.json")),
+       "the dangling link is unlinked, not left behind")
+    ok(os.path.isdir(os.path.join(sd, "state.json.tmp")),
+       "a directory is not this script's to delete")
+    ok(os.path.isdir(os.path.join(sd, "findings")), "the findings reports are kept")
+    ok("kept" in r.stdout and "findings/" in r.stdout,
+       f"reset must say the directory stays, and why: {r.stdout.strip()[:300]}")
+    ok(".loop-review/state.json.tmp is a directory" in r.stdout,
+       f"and name the directory it would not delete: {r.stdout.strip()[:300]}")
+
+    # Without findings to explain it, the directory must still be named — not "not empty".
+    d = repo({"a.py": "1\n"})
+    write(d, "a.py", "2\n")
+    run("init", "--", "a.py", cwd=d, check=True)
+    os.makedirs(os.path.join(d, ".loop-review", "project.json.tmp"))
+    r = run("reset", cwd=d)
+    ok(r.returncode == 0 and ".loop-review/project.json.tmp is a directory" in r.stdout
+       and "not empty" not in r.stdout,
+       f"a lone directory at an artifact name must be named: {r.stdout.strip()[:300]}")
+
+    # A directory at project.json is no ledger, and `reset --project` cannot remove it: say
+    # neither "no ledger" nor "run `reset --project`", which is the command that just ran.
+    d = repo({"a.py": "1\n"})
+    os.makedirs(os.path.join(d, ".loop-review", "project.json"))
+    r = run("reset", "--project", cwd=d)
+    both = r.stdout + r.stderr
+    ok(r.returncode == 0 and ".loop-review/project.json is a directory" in r.stdout
+       and "no project ledger to clear" not in both and "`reset --project` discards" not in both,
+       f"a directory at project.json must be named, not advised away: {both.strip()[:400]}")
+
+
+@case
 def reset_clears_its_own_debris_and_says_so_only_about_a_stranger():
     """What `reset` removes and what it calls "not ours" must come from one list.
 
