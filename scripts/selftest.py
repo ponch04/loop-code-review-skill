@@ -4193,6 +4193,34 @@ def a_report_only_area_that_moved_after_its_pass_is_not_reviewed():
 
 
 @case
+def a_set_aside_report_is_never_overwritten_or_set_aside_for_nothing():
+    """`project next` renamed `<slug>.md` to `<slug>.prev.md` whatever was there, and did it
+    before deciding whether the area would open at all.
+
+    A third round of an area therefore replaced the first round's report, and an area
+    emptied before its round had its last report renamed for a review that never happened.
+    """
+    d = repo({"pkg/a.py": "x\n", "keep/b.py": "y\n"})
+    fdir = os.path.join(d, ".loop-review", "findings")
+    for rnd in (1, 2, 3):
+        run("project", "init", "--force", "--report-only", "--", "pkg", cwd=d, check=True)
+        stem = run("project", "next", cwd=d, check=True).stdout.split("findings file: ")[1].splitlines()[0]
+        pass_through(d, "9.5", "0", "trusted")
+        write_text(os.path.join(d, stem), f"round {rnd}\n")
+        run("project", "close", cwd=d, check=True)
+    kept = sorted(read_text(os.path.join(fdir, f)) for f in os.listdir(fdir))
+    ok(kept == ["round 1\n", "round 2\n", "round 3\n"],
+       f"every round's report must survive the rotations: {sorted(os.listdir(fdir))}")
+
+    before = sorted(os.listdir(fdir))
+    run("project", "init", "--force", "--report-only", "--", "pkg", "keep", cwd=d, check=True)
+    shutil.rmtree(os.path.join(d, "pkg"))                       # gone before its round
+    r = run("project", "next", cwd=d)
+    ok(r.returncode == 2 and sorted(os.listdir(fdir)) == before,
+       f"an area settled empty keeps its last report where it was: {sorted(os.listdir(fdir))}")
+
+
+@case
 def an_identical_repeat_review_can_still_be_closed():
     """A clean area legitimately produces the same text twice."""
     d = repo({"pkg/a.py": "x\n"})

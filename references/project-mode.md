@@ -50,7 +50,8 @@ there too, but `accept` still refuses on it: fix it as part of the area, or clos
 
 `project close` refuses in **both** modes while a recorded review the reviewer understood has no findings file, or a blank one — even if the area has moved since or a later pass is open, because its findings are real (an empty or whitespace-only file, or a directory at that path, is no review). The path repeats
 on every review of an area, so `project next` moves any earlier review aside to
-`<slug>.prev.md` before the loop opens: whatever is at the live path was written during *this*
+`<slug>.prev.md` (or the next free `<slug>.N.prev.md` — no earlier report is ever overwritten)
+when the loop opens, and leaves it alone for an area settled empty: whatever is at the live path was written during *this*
 review, and an identical verdict on a second clean run is fine. Write this reviewer's whole
 output there. Closing deletes the loop state, so that file is all that survives, and a clean
 area needs it as much as a noisy one.

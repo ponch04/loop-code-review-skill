@@ -2142,6 +2142,28 @@ def cmd_project_init(a):
         print(f"  - {' + '.join(x)}")
 
 
+def set_aside_findings(ffile):
+    """Move an earlier review's findings file out of the live path, overwriting nothing.
+
+    A previous review's file is moved aside rather than compared against. Comparison was
+    wrong in both directions: a digest match refused a legitimately identical repeat review
+    for ever, and an mtime fallback accepted a stale file that had merely been touched.
+    Setting it aside makes the gate a plain existence check again, and keeps the old text.
+
+    The rename went to `<slug>.prev.md` whatever was there, so a third round of an area —
+    or a round re-queued after a crash left a half-written file — replaced the report kept
+    from the first. Every report the script set aside stays: the first at `.prev.md`, later
+    ones at the next free `<slug>.N.prev.md`. Returns where the file went, or None.
+    """
+    if not os.path.exists(ffile):
+        return None
+    dest, n = ffile[:-3] + ".prev.md", 2
+    while os.path.lexists(dest):
+        dest, n = f"{ffile[:-3]}.{n}.prev.md", n + 1
+    os.replace(ffile, dest)
+    return dest
+
+
 def cmd_project_next(a):
     os.chdir(repo_root())
     p = load_project()
@@ -2163,15 +2185,6 @@ def cmd_project_next(a):
         return
     nxt["status"] = "in_progress"
     nxt["started"] = now()
-    # Remember any findings file already on disk, so a leftover one cannot stand in for this
-    # review's output at close.
-    # A previous review's file is moved aside rather than compared against. Comparison was
-    # wrong in both directions: a digest match refused a legitimately identical repeat review
-    # for ever, and an mtime fallback accepted a stale file that had merely been touched.
-    # Setting it aside makes the gate a plain existence check again, and keeps the old text.
-    seed_file = os.path.join(FINDINGS_DIR, area_slug(nxt) + ".md")
-    if os.path.exists(seed_file):
-        os.replace(seed_file, seed_file[:-3] + ".prev.md")
     save_project(p)
     # Re-checked here, not only at queue time: files can be deleted or moved between
     # queueing the project and reaching this area, and an area that has become empty must
@@ -2190,6 +2203,10 @@ def cmd_project_next(a):
               f"{left} area(s) still pending. Run `project next` again for the next one.",
               file=sys.stderr)
         sys.exit(NO_CHANGES)
+    # Only now, with a loop about to open: an area settled empty above was not reviewed this
+    # round, so its last report stays where it was rather than being renamed for a review
+    # that never happened.
+    set_aside_findings(os.path.join(FINDINGS_DIR, area_slug(nxt) + ".md"))
     state = {
         "created": now(), "mode": "project", "base": None,
         # The queued paths, kept as the loop's identity even if `scope --` widens `scope`.
