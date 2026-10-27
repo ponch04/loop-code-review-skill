@@ -2803,34 +2803,109 @@ def declared_parameters(node):
     return [x.arg for x in named] + [x.arg for x in (a.vararg, a.kwarg) if x]
 
 
+FUNCS = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
+COMPS = (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
+
+
+def scope_bindings(scope):
+    """The names `scope` (a function, lambda or comprehension) binds locally.
+
+    Parameters, assignment targets, `except ... as`, imports, and nested `def`/`class`
+    names — collected from this scope only, never from a nested one, and minus `global` /
+    `nonlocal` declarations. A comprehension binds its loop targets and nothing else.
+    """
+    if isinstance(scope, COMPS):
+        return {t.id for g in scope.generators for t in ast.walk(g.target)
+                if isinstance(t, ast.Name)}
+    names, shared = set(declared_parameters(scope)), set()
+    body = [scope.body] if isinstance(scope, ast.Lambda) else scope.body
+
+    def collect(n):
+        if isinstance(n, ast.Name) and isinstance(n.ctx, (ast.Store, ast.Del)):
+            names.add(n.id)
+        elif isinstance(n, ast.ExceptHandler) and n.name:
+            names.add(n.name)
+        elif isinstance(n, (ast.Import, ast.ImportFrom)):
+            names.update((x.asname or x.name.split(".")[0]) for x in n.names)
+        elif isinstance(n, (ast.Global, ast.Nonlocal)):
+            shared.update(n.names)
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.add(n.name)
+            return                    # its body is its own scope; its header is not ours
+        if isinstance(n, FUNCS + COMPS):
+            return
+        for c in ast.iter_child_nodes(n):
+            collect(c)
+
+    for stmt in body:
+        collect(stmt)
+    return names - shared
+
+
+def resolve_loads(tree, skip=None):
+    """`(module_loads, local_loads)`: every `Name` load, resolved the way Python does.
+
+    `module_loads` holds names no enclosing function, lambda or comprehension binds — reads
+    of module-level things such as helpers. `local_loads` maps each such scope to the names
+    of its own bindings read there, nested scopes included. Defaults, decorators and
+    annotations are evaluated outside the function they belong to, and a comprehension's
+    first iterable outside the comprehension, so they are resolved there. `skip` is a
+    subtree left out entirely (a helper's own body, so recursion is no caller).
+    """
+    module, local = set(), {}
+
+    def load(name, chain):
+        for scope, bound in reversed(chain):
+            if name in bound:
+                local.setdefault(scope, set()).add(name)
+                return
+        module.add(name)
+
+    def visit(n, chain):
+        if n is skip:
+            return
+        if isinstance(n, FUNCS):
+            a = n.args
+            outside = list(a.defaults) + [d for d in a.kw_defaults if d is not None]
+            if not isinstance(n, ast.Lambda):
+                outside += list(n.decorator_list) + ([n.returns] if n.returns else [])
+                outside += [x.annotation for x in a.posonlyargs + a.args + a.kwonlyargs
+                            + [x for x in (a.vararg, a.kwarg) if x] if x.annotation]
+            for c in outside:
+                visit(c, chain)
+            inner = chain + [(n, scope_bindings(n))]
+            for c in ([n.body] if isinstance(n, ast.Lambda) else n.body):
+                visit(c, inner)
+            return
+        if isinstance(n, COMPS):
+            visit(n.generators[0].iter, chain)
+            inner = chain + [(n, scope_bindings(n))]
+            for i, g in enumerate(n.generators):
+                if i:
+                    visit(g.iter, inner)
+                for c in g.ifs:
+                    visit(c, inner)
+            for c in ((n.key, n.value) if isinstance(n, ast.DictComp) else (n.elt,)):
+                visit(c, inner)
+            return
+        if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load):
+            load(n.id, chain)
+        for c in ast.iter_child_nodes(n):
+            visit(c, chain)
+
+    visit(tree, [])
+    return module, local
+
+
 def names_loaded(node, skip=None):
-    """Names *read* under `node`, as plain names — never attributes, never assignment targets.
+    """Names read as module-level names under `node`: never attributes, assignment targets,
+    or a local of the same name in some function.
 
     Both static guards counted `n.attr` and every `ast.Name`, so an unused parameter called
     `path` was "read" by `os.path`, and a dead helper called `strip` was "called" by any
-    `.strip()` in the file: each failed open exactly where names are common. A read is a
-    `Name` in `Load` context. Inside any function where the name is local — a parameter, or
-    assigned there — a load is of the local, not of a module-level helper of the same name.
-    `skip` is a subtree to leave out (a helper's own body, for recursion).
+    `.strip()` in the file. `resolve_loads` is the one place a read is decided.
     """
-    out = set()
-
-    def visit(n, local):
-        if n is skip:
-            return
-        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
-            mine = set(declared_parameters(n)) if not isinstance(n, ast.Lambda) else {
-                a.arg for a in n.args.args + n.args.kwonlyargs + n.args.posonlyargs}
-            mine |= {t.id for t in ast.walk(n) if isinstance(t, ast.Name)
-                     and isinstance(t.ctx, ast.Store)}
-            local = local | mine
-        if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load) and n.id not in local:
-            out.add(n.id)
-        for c in ast.iter_child_nodes(n):
-            visit(c, local)
-
-    visit(node, set())
-    return out
+    return resolve_loads(node, skip)[0]
 
 
 def unread_parameters(src):
@@ -2840,13 +2915,15 @@ def unread_parameters(src):
     repository, where whichever forms happen to appear decide what it is proved to catch.
     """
     stale = []
-    for node in ast.walk(ast.parse(src)):
+    tree = ast.parse(src)
+    locals_by_scope = resolve_loads(tree)[1]
+    for node in ast.walk(tree):
         if not isinstance(node, ast.FunctionDef):
             continue
-        # The body's reads, not its attribute names: the parameters themselves are local to
-        # `node`, so they are read wherever a `Name` loads them.
-        read = {n.id for n in ast.walk(node)
-                if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
+        # Reads that resolve to *this* function's binding: not an attribute, not a shadowing
+        # parameter or comprehension variable in a nested scope, not the header (defaults
+        # and decorators are evaluated outside the function).
+        read = locals_by_scope.get(node, set())
         for arg in declared_parameters(node):
             if arg in read or (arg == "a" and node.name.startswith("cmd_")):
                 continue
@@ -2878,6 +2955,14 @@ def the_unread_parameter_guard_sees_every_parameter_form():
        "assigning a parameter is not reading it")
     ok(not unread_parameters("def f(x):\n    def g():\n        return x\n    return g"),
        "a closure that reads it does")
+    ok(unread_parameters("def f(x):\n    return [x for x in (1, 2)]"),
+       "a comprehension variable of the same name is not the parameter")
+    ok(unread_parameters("def f(x):\n    def g(x):\n        return x\n    return g"),
+       "a nested function's own parameter of the same name is not the parameter")
+    ok(unread_parameters("x = 1\ndef f(x, y=x):\n    return y") == ["f(x) at line 2"],
+       "a default is evaluated outside the function: it reads the module's x")
+    ok(unread_parameters("x = 1\n@x\ndef f(x):\n    return 1"),
+       "so is a decorator")
 
 
 @case
@@ -2941,6 +3026,21 @@ def the_unreachable_helper_guard_sees_through_names_that_merely_match():
        "a local variable of the same name is no caller")
     ok("cb" not in dead("def cb():\n    return 1\ndef g(h=cb):\n    return h"),
        "a reference as a value, not only a call, keeps it live")
+    live = lambda src: [n for n, _ in unreachable_helpers(src, {"g"})]
+    ok(live("def f():\n    return 1\ndef g(xs):\n    a = f()\n    return a, [f for f in xs]") == [],
+       "a comprehension variable elsewhere in the caller does not hide the call")
+    ok(live("def f():\n    return 1\ndef g():\n    a = f()\n    def h():\n        f = 2\n        return f\n    return a, h") == [],
+       "nor does a nested function's local of the same name")
+    ok(live("def cb():\n    return 1\ndef g(cb=cb):\n    return cb") == [],
+       "a default naming the helper reads the module's helper, even when a parameter shadows it")
+    ok(live("def cb():\n    return 1\ndef g(h=cb):\n    cb = 1\n    return h") == [],
+       "and a local assigned later in the body does not change that")
+    ok("f" in dead("def f():\n    return 1\ndef g():\n    try:\n        pass\n    except Exception as f:\n        return f"),
+       "an `except ... as` name is a local, no caller")
+    ok("f" in dead("def f():\n    return 1\ndef g():\n    import os as f\n    return f"),
+       "so is an imported name")
+    ok("f" in dead("def f():\n    return 1\ng = lambda *f: f"),
+       "and a lambda's *args")
 
 
 # ----------------------------------------------------------------- prose vs the real CLI
