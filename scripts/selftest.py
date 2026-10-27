@@ -3027,6 +3027,25 @@ def every_command_in_the_prose_exists_in_the_cli():
     assert_invocations_parse(lines)
 
 
+def refused_for_a_missing_argument(r):
+    """True only when a recommended command stopped for an argument the message could not
+    carry — never for a flag it does not have, a value it rejects, or a gate.
+
+    Exit 2 was read as "missing argument" outright, but three different things exit 2:
+    argparse's missing argument (fine), argparse's unknown flag or bad value (the exact
+    `reset --force` dead end these runners exist to catch), and `NO_CHANGES`, a gate. Ask
+    the message instead: argparse's own wording for a missing argument, or a `die()` that
+    says the command "needs" one.
+    """
+    err = r.stderr or ""
+    if r.returncode == 2 and re.search(
+            r"error: (the following arguments are required|argument \S+: expected "
+            r"(one|at least one) argument)", err):
+        return True
+    first = (err.strip().splitlines() or [""])[0]
+    return r.returncode == 1 and first.startswith("loop-review: ") and " needs " in first
+
+
 def stuck_states():
     """Build each state whose refusal names a way out, and return what it printed.
 
@@ -3127,6 +3146,34 @@ def stuck_states():
 
 
 @case
+def only_a_missing_argument_excuses_a_recommended_command():
+    """Exit 2 is three different things; only one of them is a missing argument.
+
+    Both recovery runners accepted any exit 2, which also covers argparse rejecting a flag
+    that does not exist — the `reset --force` dead end they were written to catch — and the
+    `NO_CHANGES` gate. Each kind is produced for real here and classified.
+    """
+    d = repo()
+    write(d, "a.py", "v2\n")
+    run("init", "--", "a.py", cwd=d, check=True)
+    cases = (
+        (("reset", "--force"), False, "an unknown flag is a dead end"),
+        (("amend", "--test-evidence", "maybe"), False, "a rejected value is a dead end"),
+        (("amend", "--test-evidence"), True, "a flag left without its value is incomplete"),
+        (("scope",), True, "a die() that says the command needs an argument is incomplete"),
+    )
+    for args, excused, label in cases:
+        r = run(*args, cwd=d)
+        ok(r.returncode != 0 and refused_for_a_missing_argument(r) is excused,
+           f"{label}: `{' '.join(args)}` rc={r.returncode} {r.stderr.strip()[-120:]}")
+    sh("git checkout -q -- a.py", d)                             # the scope empties
+    run("validate", "--", "true", cwd=d)
+    r = run("pass-start", cwd=d)
+    ok(r.returncode == 2 and not refused_for_a_missing_argument(r),
+       f"the NO_CHANGES gate is a refusal, not a missing argument: {r.stderr.strip()[:120]}")
+
+
+@case
 def a_recommended_recovery_works_in_the_state_that_printed_it():
     """Parsing a recommendation only proves the flags exist. Running it proves it is a way out.
 
@@ -3151,8 +3198,7 @@ def a_recommended_recovery_works_in_the_state_that_printed_it():
         # command being retracted. Refusal for a *missing argument* is therefore allowed;
         # refusal by a gate is not, and that is the whole difference between a way out and
         # a detour through a certain "no".
-        incomplete = r.returncode == 2 or " needs " in r.stderr.split("\n")[0]
-        ok(r.returncode == 0 or incomplete,
+        ok(r.returncode == 0 or refused_for_a_missing_argument(r),
            f"{label}: `{' '.join(tokens)}` is named as the way out but the state refuses it: "
            f"{(r.stderr or r.stdout).strip()[:200]}")
 
@@ -3208,8 +3254,7 @@ def every_command_an_acceptance_blocker_names_runs_in_that_state():
             shutil.copytree(d, copy, dirs_exist_ok=True)
             r = run(*tokens, cwd=copy)
             seen += 1
-            missing_arg = r.returncode == 2 or " needs " in r.stderr.split("\n")[0]
-            ok(r.returncode == 0 or missing_arg,
+            ok(r.returncode == 0 or refused_for_a_missing_argument(r),
                f"{label}: accept names `{named}` but this state refuses it: "
                f"{(r.stderr or r.stdout).strip()[:200]}")
     ok(seen >= 2, f"the fixtures must name recoveries to run, found {seen}")
