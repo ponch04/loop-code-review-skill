@@ -221,13 +221,25 @@ def write_json(path, payload):
     Atomic because a partial write costs the whole loop (see save()), and UTF-8 for the same
     reason as read_json — the two must agree on the encoding whatever the machine's locale.
     """
-    os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(payload, f, indent=2)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp, path)
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except OSError as e:
+        # A full disk or a blocked `.tmp` surfaced as a traceback, and the operator could not
+        # tell whether the run had been recorded. Atomicity already answers it: the old file
+        # is intact, the new state was not written. Say so; drop a half-written temp.
+        if os.path.isfile(tmp) and not os.path.islink(tmp):
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+        die(f"could not write {path} ({e.strerror}) — nothing was recorded; the previous "
+            "state is intact. Free the space or clear the obstruction, then repeat the command")
 
 
 def load():
@@ -1184,7 +1196,18 @@ def cmd_validate(a):
     cmd = join_cmd(a.command)
     before = fp_of(state)
     print(f"$ {cmd}", flush=True)
-    r = subprocess.run(cmd, shell=True)
+    try:
+        r = subprocess.run(cmd, shell=True)
+    except KeyboardInterrupt:
+        # Ctrl-C reaches the check and this script alike. A run that did not finish is
+        # evidence about nothing, so nothing is recorded — but that used to be a traceback,
+        # leaving the operator to guess. Say it, and say whether the files moved meanwhile:
+        # every gate recomputes the fingerprint, so a moved scope simply has no validation
+        # until the check is run again on what is there now.
+        moved = fp_of(state) != before
+        die("validation interrupted — nothing recorded"
+            + ("; the scoped files changed while it ran, so re-run it once they settle"
+               if moved else "; re-run it to record a result"), code=130)
     after = fp_of(state)
     # A formatter, a snapshot-updating test run or a codegen step edits the scope while it
     # validates it. Recording the result against `after` would attach green evidence to a

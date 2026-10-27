@@ -2504,6 +2504,35 @@ def a_check_killed_by_a_signal_reports_one_status_everywhere():
 
 
 @case
+def an_interrupted_or_unwritable_validation_records_nothing_and_says_so():
+    """Ctrl-C mid-check, or a state file that cannot be written, ended in a traceback.
+
+    Nothing false was recorded — the write is atomic and every gate recomputes the
+    fingerprint — but the operator could not tell. An interrupted run is evidence about
+    nothing: record nothing, say whether the scope moved meanwhile, and keep the gates
+    seeing the state as it now is.
+    """
+    d = repo()
+    write(d, "a.py", "v2\n")
+    run("init", "--", "a.py", cwd=d, check=True)
+    r = run("validate", "--", "echo v3 > a.py; kill -INT $PPID; sleep 2", cwd=d)
+    ok(r.returncode == 130 and "interrupted — nothing recorded" in r.stderr
+       and "changed while it ran" in r.stderr and "Traceback" not in r.stderr,
+       f"an interrupted check: rc={r.returncode} {r.stderr.strip()[-200:]}")
+    ok(not read_state(d)["validation"], "and it leaves no record")
+    r = run("pass-start", cwd=d)
+    ok(r.returncode != 0 and "no validation recorded for the current state" in r.stderr,
+       f"the gate sees the moved state as unvalidated: {r.stderr.strip()[:160]}")
+
+    os.makedirs(os.path.join(d, ".loop-review", "state.json.tmp"))
+    r = run("validate", "--", "true", cwd=d)
+    ok(r.returncode == 1 and "nothing was recorded; the previous state is intact" in r.stderr
+       and "Traceback" not in r.stderr,
+       f"a state write that fails says so: rc={r.returncode} {r.stderr.strip()[-200:]}")
+    ok(not read_state(d)["validation"], "and the old state is what remains")
+
+
+@case
 def argument_values_are_validated():
     d = repo()
     write(d, "a.py", "v2\n")
