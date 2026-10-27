@@ -975,6 +975,31 @@ def the_documented_project_workflow_runs_as_written():
 
 
 @case
+def the_loops_own_state_is_never_a_scope_path():
+    """`.loop-review` named as a path was kept in the scope and printed into the reviewer's
+    prompt — which the prompts and project-mode.md forbid — while the fingerprint excluded
+    it, so it scoped nothing; and on a first run it drew a false "does not exist" warning.
+    `.` still covers a repository whose state lives inside it (the next case).
+    """
+    d = repo({"a.py": "1\n", "pkg/b.py": "2\n"})
+    write(d, "a.py", "2\n")
+    sd = os.path.join(d, ".loop-review")
+    for args in (("init", "--", "a.py", ".loop-review"),
+                 ("init", "--", "a.py", ".loop-review/findings"),
+                 ("project", "init", "--", "pkg", "+", ".loop-review")):
+        r = run(*args, cwd=d)
+        ok(r.returncode != 0 and "the loop's own state" in r.stderr and "does not exist" not in r.stderr,
+           f"`{' '.join(args)}` must be refused by name: rc={r.returncode} {r.stderr.strip()[:200]}")
+        ok(not os.path.exists(os.path.join(sd, "state.json"))
+           and not os.path.exists(os.path.join(sd, "project.json")),
+           f"`{' '.join(args)}`: and nothing may be written")
+    run("init", "--", "a.py", cwd=d, check=True)
+    r = run("scope", "--", ".loop-review", cwd=d)
+    ok(r.returncode != 0 and "the loop's own state" in r.stderr and read_state(d)["scope"] == ["a.py"],
+       f"`scope -- .loop-review` must not widen the loop: {read_state(d)['scope']} {r.stderr.strip()[:160]}")
+
+
+@case
 def state_dir_inside_scope_does_not_deadlock():
     """`init -- .` must stay openable: the loop's own writes are not reviewed changes."""
     d = repo()

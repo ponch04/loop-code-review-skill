@@ -193,7 +193,17 @@ def to_repo_relative(path, root):
         rel = os.path.relpath(target, real_root)
     if rel.split(os.sep)[0] == os.pardir:
         die(f"path is outside the repository: {path}")
-    return rel.replace(os.sep, "/")
+    rel = rel.replace(os.sep, "/")
+    # The loop's own state is never under review: the fingerprint already excludes it, so a
+    # path naming it scoped nothing — yet it was kept in the scope and printed into the
+    # reviewer's prompt, where references/project-mode.md and the prompts say it never goes.
+    # Every path the operator names passes through here, so one refusal covers init, scope
+    # and project init; the warning it used to draw ("does not exist", before the first save
+    # created the directory) was false as well.
+    if rel == STATE_DIR or rel.startswith(STATE_DIR + "/"):
+        die(f"`{path}` is the loop's own state ({STATE_DIR}/), never part of what is reviewed "
+            "— leave it out of the paths")
+    return rel
 
 
 def die(msg, code=1):
