@@ -2803,6 +2803,36 @@ def declared_parameters(node):
     return [x.arg for x in named] + [x.arg for x in (a.vararg, a.kwarg) if x]
 
 
+def names_loaded(node, skip=None):
+    """Names *read* under `node`, as plain names — never attributes, never assignment targets.
+
+    Both static guards counted `n.attr` and every `ast.Name`, so an unused parameter called
+    `path` was "read" by `os.path`, and a dead helper called `strip` was "called" by any
+    `.strip()` in the file: each failed open exactly where names are common. A read is a
+    `Name` in `Load` context. Inside any function where the name is local — a parameter, or
+    assigned there — a load is of the local, not of a module-level helper of the same name.
+    `skip` is a subtree to leave out (a helper's own body, for recursion).
+    """
+    out = set()
+
+    def visit(n, local):
+        if n is skip:
+            return
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            mine = set(declared_parameters(n)) if not isinstance(n, ast.Lambda) else {
+                a.arg for a in n.args.args + n.args.kwonlyargs + n.args.posonlyargs}
+            mine |= {t.id for t in ast.walk(n) if isinstance(t, ast.Name)
+                     and isinstance(t.ctx, ast.Store)}
+            local = local | mine
+        if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load) and n.id not in local:
+            out.add(n.id)
+        for c in ast.iter_child_nodes(n):
+            visit(c, local)
+
+    visit(node, set())
+    return out
+
+
 def unread_parameters(src):
     """`name(param) at line N` for every parameter its own body never reads.
 
@@ -2813,8 +2843,10 @@ def unread_parameters(src):
     for node in ast.walk(ast.parse(src)):
         if not isinstance(node, ast.FunctionDef):
             continue
-        read = ({n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
-                | {n.attr for n in ast.walk(node) if isinstance(n, ast.Attribute)})
+        # The body's reads, not its attribute names: the parameters themselves are local to
+        # `node`, so they are read wherever a `Name` loads them.
+        read = {n.id for n in ast.walk(node)
+                if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
         for arg in declared_parameters(node):
             if arg in read or (arg == "a" and node.name.startswith("cmd_")):
                 continue
@@ -2840,6 +2872,12 @@ def the_unread_parameter_guard_sees_every_parameter_form():
     ok(not unread_parameters("def f(*rest):\n    return rest"), "a used *args must not be")
     ok(not unread_parameters("def cmd_x(a):\n    return 1"),
        "the dispatcher's `a.fn(a)` contract stays exempt")
+    ok(unread_parameters("import os\ndef f(path):\n    return os.path.sep"),
+       "an attribute of the same name is not a read of the parameter")
+    ok(unread_parameters("def f(x):\n    x = 1\n    return 2"),
+       "assigning a parameter is not reading it")
+    ok(not unread_parameters("def f(x):\n    def g():\n        return x\n    return g"),
+       "a closure that reads it does")
 
 
 @case
@@ -2867,16 +2905,42 @@ def the_script_carries_no_unreachable_helper():
     everything else must be reachable from within the script.
     """
     src = read_text(os.path.join(ROOT, "scripts", "loop_review.py"))
-    tree = ast.parse(src)
-    defined = {n.name: n.lineno for n in tree.body if isinstance(n, ast.FunctionDef)}
-    used = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
-    used |= {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)}
     # The entry point is called by the interpreter, and selftest drives the CLI through these.
-    used |= {"main", "build_parser"}
-    used |= set(re.findall(r"module\(\)\.([A-Za-z_]\w*)",
+    live = {"main", "build_parser"}
+    live |= set(re.findall(r"module\(\)\.([A-Za-z_]\w*)",
                            read_text(os.path.join(ROOT, "scripts", "selftest.py"))))
-    dead = sorted((name, line) for name, line in defined.items() if name not in used)
+    dead = unreachable_helpers(src, live)
     ok(not dead, "unreachable helper(s): " + "; ".join(f"{n} at line {l}" for n, l in dead))
+
+
+def unreachable_helpers(src, live=()):
+    """`(name, line)` for each top-level function nothing outside its own body reads."""
+    tree = ast.parse(src)
+    dead = []
+    for fn in (n for n in tree.body if isinstance(n, ast.FunctionDef)):
+        if fn.name not in live and fn.name not in names_loaded(tree, skip=fn):
+            dead.append((fn.name, fn.lineno))
+    return sorted(dead)
+
+
+@case
+def the_unreachable_helper_guard_sees_through_names_that_merely_match():
+    """Known cases: the guard counted every attribute and every name in the module.
+
+    A dead helper called itself, or shared its name with a method (`.strip()`) or a local
+    variable elsewhere (`state = load()`), and was "used" for good.
+    """
+    dead = lambda src: [n for n, _ in unreachable_helpers(src)]
+    ok(dead("def f():\n    return 1") == ["f"], "an uncalled helper is caught")
+    ok(dead("def f():\n    return 1\ndef main():\n    return f()") == ["main"],
+       "a called one is not")
+    ok("f" in dead("def f(n):\n    return f(n - 1)"), "recursion alone is no caller")
+    ok("strip" in dead("def strip():\n    return 1\ndef g(s):\n    return s.strip()"),
+       "a method of the same name is no caller")
+    ok("state" in dead("def state():\n    return 1\ndef g():\n    state = 2\n    return state"),
+       "a local variable of the same name is no caller")
+    ok("cb" not in dead("def cb():\n    return 1\ndef g(h=cb):\n    return h"),
+       "a reference as a value, not only a call, keeps it live")
 
 
 # ----------------------------------------------------------------- prose vs the real CLI
