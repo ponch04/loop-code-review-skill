@@ -1212,11 +1212,38 @@ def the_abort_note_agrees_with_what_pass_start_will_actually_do():
         "--test-evidence", "trusted", cwd=d, check=True)
     run("pass-start", "--force", cwd=d, check=True)     # forced onto the same fingerprint
     err = run("pass-abort", "--reason", "unusable again", cwd=d, check=True).stderr
-    ok("will still refuse" in err,
+    ok("will refuse" in err and "unchanged since the last pass" in err,
        f"with a recorded pass on this fingerprint the note must say so: {err.strip()[:200]}")
     r = run("pass-start", cwd=d)
     ok(r.returncode != 0 and "unchanged" in r.stderr,
        f"and the gate must refuse for that reason: rc={r.returncode} {r.stderr.strip()[:160]}")
+
+
+@case
+def the_abort_note_quotes_the_gate_and_never_counts_below_zero():
+    """The note explained every refusal as "the scope has not moved, and the abort is not
+    what stands in the way" — at the pass limit, the abort is exactly what used the last
+    pass, and no edit unblocks it. And passes forced past the limit left "-1 of N".
+    """
+    d = repo({"src/a.py": "1\n"})
+    write(d, "src/a.py", "2\n")
+    run("init", "--max-passes", "1", "--", "src", cwd=d, check=True)
+    run("validate", "--", "true", cwd=d)
+    run("pass-start", cwd=d, check=True)
+    r = run("pass-abort", "--reason", "unusable reviewer", cwd=d, check=True)
+    ok("0 of 1 left" in r.stdout and "pass limit 1 reached" in r.stderr
+       and "has not moved" not in r.stderr and "not what stands in the way" not in r.stderr,
+       f"at the limit the note names the limit, not the scope: {(r.stdout + r.stderr).strip()[:300]}")
+    gate = run("pass-start", cwd=d).stderr
+    ok("pass limit 1 reached" in gate, "and that is what the gate says")
+
+    run("pass-start", "--force", cwd=d, check=True)               # past the limit, by a human
+    run("pass-abort", "--reason", "unusable again", cwd=d, check=True)
+    run("pass-start", "--force", cwd=d, check=True)
+    r = run("pass-abort", "--reason", "and again", cwd=d, check=True)
+    left = re.search(r"(-?\d+) of 1 left", r.stdout)
+    ok(left is not None and int(left.group(1)) == 0,
+       f"the remaining count never goes below zero: {r.stdout.strip()[:160]}")
 
 
 @case
