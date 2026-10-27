@@ -727,10 +727,35 @@ def red_provenance(state, cmd):
     # `is_evidence` is what keeps this honest: a `moved_scope` run cannot establish that the
     # check was ever green, and `regressed` tells a fresh reviewer that the change under
     # review broke it — a conclusion no voided run may support.
-    for v in state["validation"]:
-        if v["cmd"] == cmd and v["exit"] == 0 and is_evidence(v):
-            return "regressed"
-    return "inherited"
+    runs = [v for v in state["validation"] if v["cmd"] == cmd and is_evidence(v)]
+    if any(v["exit"] == 0 for v in runs):
+        return "regressed"
+    # `inherited` is a claim about the area *as it was opened*, so it needs a run there.
+    # Read as "never green", a check first run after the fix batch — red, and never tried
+    # on the original — told the reviewer the area had always failed it, which nothing
+    # showed. Loops opened before the stamp keep the old reading; there is nothing better.
+    opened = state.get("opened_fingerprint")
+    if opened is None or any(v["fingerprint"] == opened and v["exit"] not in NEVER_RAN
+                             for v in runs):
+        return "inherited"
+    return "first run after the area changed"
+
+
+def red_label(state, v):
+    """The marker a red line carries in `status`, or None.
+
+    Only a project area has an inheritance to speak of: in task mode the reviewer prompt
+    asks for bare `<command> -> <exit>` lines, and `[inherited]` there told the reviewer of
+    a change that the failure predated it. A check that never started (126/127) is evidence
+    about nothing — `pass-start` refuses it in every mode — so it is never `[inherited]`.
+    """
+    if state is None or v["exit"] == 0 or is_declaration(v):
+        return None
+    if v["exit"] in NEVER_RAN:
+        return "never ran"
+    if state.get("mode", "changes") != "project":
+        return None
+    return red_provenance(state, v["cmd"])
 
 
 def metric(value, absent="not given"):
@@ -783,10 +808,10 @@ def print_validation(cur, header="validation on current state", state=None, file
         if is_declaration(v):
             print(f"  - no executable check applies"
                   + (f": {v['reason']}" if v.get("reason") else ""), file=out)
-        elif v["exit"] != 0 and state is not None:
-            print(f"  - {v['cmd']}  -> exit {v['exit']}  [{red_provenance(state, v['cmd'])}]", file=out)
         else:
-            print(f"  - {v['cmd']}  -> exit {v['exit']}", file=out)
+            label = red_label(state, v)
+            print(f"  - {v['cmd']}  -> exit {v['exit']}" + (f"  [{label}]" if label else ""),
+                  file=out)
 
 
 def review_integrity(state, phrasing="loop"):
@@ -1015,6 +1040,10 @@ def cmd_init(a):
         "validation": [],
     }
     state["fingerprint_current"] = fp_of(state)
+    # What `[inherited]` is measured against, in every mode a loop can be opened in: missing
+    # here, `init --mode project` fell back to the pre-stamp rule and still called a check
+    # first run after an edit "inherited".
+    state["opened_fingerprint"] = state["fingerprint_current"]
     # Refuse rather than warn, in both modes. A loop on an empty scope passes every gate —
     # validation is green because nothing runs against a change, the fingerprint never
     # moves, and `accept` sees no blocker — so the one thing the script exists to prevent
@@ -1523,9 +1552,10 @@ def cmd_pass_start(a):
         # through: in report-only `project close` insists the findings file exists so they
         # are written down, and in fix mode `accept` still refuses on red, so an area whose
         # inherited failures were not fixed closes `incomplete` with them as its blocker.
-        print("note: opening a project pass over red validation. Tell the reviewer which is "
-              "which — an inherited failure is a property of the area, a regressed one was "
-              "broken inside this loop and is about the change:", file=sys.stderr)
+        print("note: opening a project pass over red validation. Pass each marker on: an "
+              "inherited failure is a property of the area, a regressed one was broken inside "
+              "this loop and is about the change, and one first run after the area changed has "
+              "an origin nobody knows:", file=sys.stderr)
         print_validation(red, "failing checks", state, file=sys.stderr)
         print("  in report-only write them into the findings file; in fix mode they still "
               "block `accept`, so fix them or close the area incomplete with them as the "
@@ -2340,6 +2370,8 @@ def cmd_project_next(a):
         "max_passes": p["max_passes"], "passes": [], "validation": [],
     }
     state["fingerprint_current"] = fp_of(state)
+    # The area as it was handed over: what `[inherited]` means a red check failed on.
+    state["opened_fingerprint"] = state["fingerprint_current"]
     save(state)
     # Again here, and not only at queue time: areas are queued once and opened one by one,
     # so a path can be renamed or deleted in between — and this is the moment the agent

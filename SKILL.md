@@ -53,7 +53,7 @@ If either surfaces later, record it with `LR brief --task-brief "..."` / `--scop
 
 **1. Validate** the current state with the smallest meaningful checks for the touched surface (focused tests, typecheck, lint, build). When it genuinely has none — prose, config, fixtures — record `validate --none --reason "..."` and give the reviewer that reason verbatim. Never stand in a green `true`: it satisfies condition 1 vacuously *and* reaches the reviewer as a check you claim to have run.
 
-*In task mode:* fix red validation before asking for a review; narrow a check that is also red before your change to the delta rather than recording a repository-wide invariant. *In project mode:* the pass opens over a failing check, since an inherited area is reviewed as it stands — `status` marks each `[inherited]` or `[regressed]`, and you pass that marker on. `accept` refuses on red in both. `references/project-mode.md` has the rest.
+*In task mode:* fix red validation before asking for a review; narrow a check that is also red before your change to the delta rather than recording a repository-wide invariant. *In project mode:* the pass opens over a failing check, since an inherited area is reviewed as it stands — `status` marks each failing check, and you pass that marker on. `accept` refuses on red in both. `references/project-mode.md` has the rest.
 
 A command that never ran (typo, missing tool) blocks `pass-start` in both modes — evidence about nothing, not an inherited failure: fix and re-run it, or retract it with `LR validate-drop -- <command>` (`--force` once a pass rested on it); `--none` withdraws a mistaken `validate --none`. One that *edited* the scope counts as evidence for neither state: re-run once the files settle.
 

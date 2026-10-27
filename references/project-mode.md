@@ -38,7 +38,7 @@ In `--report-only` an area ends after step 3: record the pass, write the finding
 `reviewed` either way and running it only invites a contradictory report — the script refuses `accept` and `resolve` there, and `status` names `project close` as the next step. `amend` stays
 available: it completes the reviewer's own output, it does not resolve anything. If the area's
 checks were already red, the pass still opens — inherited red is a property of the area you
-inherited, not evidence about a change — and the findings file must say so. When an area has no executable check at all,
+inherited, not evidence about a change — and the findings file must say so. `status` marks each red check: `[inherited]` (red on the area as it was opened), `[regressed]` (green earlier in this loop), or `[first run after the area changed]` (never run on the area as opened, so its origin is unknown — say exactly that); `[never ran]` is a typo or missing tool, which `pass-start` refuses. When an area has no executable check at all,
 record that with `validate --none --reason "..."` and pass the reason to the reviewer verbatim;
 never stand in a green `true`.
 
