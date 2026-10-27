@@ -3296,7 +3296,12 @@ def script_message_lines():
     in an acceptance blocker was among the unseen. Docstrings are the exception: they explain
     the code, quoting past dead ends by name, and `--help` has a case of its own.
     """
-    src = read_text(os.path.join(ROOT, "scripts", "loop_review.py"))
+    return [(f"scripts/loop_review.py:{n}", raw, body) for n, raw, body in
+            string_hits(read_text(os.path.join(ROOT, "scripts", "loop_review.py")))]
+
+
+def string_hits(src):
+    """`(line, text, body)` for every invocation in the printable strings of `src`."""
     tree = ast.parse(src)
     docstrings = set()
     for node in ast.walk(tree):
@@ -3306,14 +3311,31 @@ def script_message_lines():
                     and isinstance(first.value.value, str)):
                 docstrings.add(id(first.value))
     out = []
+    in_fstring = {id(v) for n in ast.walk(tree) if isinstance(n, ast.JoinedStr) for v in n.values}
     for node in ast.walk(tree):
-        # f-strings contribute their literal parts; an interpolated value is not a command
-        # name, so dropping it cannot hide one.
-        if (isinstance(node, ast.Constant) and isinstance(node.value, str)
-                and id(node) not in docstrings):
-            for body in command_hits(node.value):
-                out.append((f"scripts/loop_review.py:{node.lineno}", node.value.strip(), body))
+        # An f-string is read whole, its interpolations as `ARG`. Read as separate constants
+        # — the old way — `validate-drop -- {cmd}` came apart into "`validate-drop -- " and
+        # "`", no piece held a backtick pair, and the command was never parsed.
+        if isinstance(node, ast.JoinedStr):
+            text = "".join(v.value if isinstance(v, ast.Constant) else "ARG" for v in node.values)
+        elif (isinstance(node, ast.Constant) and isinstance(node.value, str)
+              and id(node) not in docstrings and id(node) not in in_fstring):
+            text = node.value
+        else:
+            continue
+        for body in command_hits(text):
+            out.append((node.lineno, text.strip(), body))
     return out
+
+
+def invocations():
+    """Every invocation this skill tells someone to run, from every place it says so.
+
+    The prose, the evals' prompts and expected outputs, and every string the script can
+    print — one list, so a new source of recommendations is added here once rather than
+    remembered by each check. Each hit goes to the real parser; nothing is matched as text.
+    """
+    return doc_command_lines() + script_message_lines()
 
 
 # A value a message may leave as a placeholder (`...`, or nothing after the flag), filled in
@@ -3321,6 +3343,33 @@ def script_message_lines():
 # with `choices` rejects both, so it needs its own — and a flag missing from this table reads
 # as a broken recommendation, which is the safe direction.
 PLACEHOLDERS = {"--test-evidence": "trusted"}
+
+
+def prose_hits(text):
+    """`(line, body)` for every invocation in a document's text."""
+    text = text.replace("\\\n", " ")                         # fenced line continuations
+    # An inline span wrapped across a line — `project close\n  --force` — was cut in two by
+    # splitlines(), no half held a backtick pair, and the flag went unparsed. Spans are
+    # matched in order from the start, as Markdown pairs them, fenced blocks skipped, and a
+    # line break is collapsed only *inside* one. A regex joining "`…\n…`" anywhere paired
+    # the closing backtick of one span with the opening one of the next, hiding exactly
+    # the wrapped span it was for; a blank line ends a paragraph, so it ends no span.
+    def join(m):
+        body = m.group(1)
+        if body is None or re.search(r"\n\s*\n", body):
+            return m.group(0)
+        return "`" + re.sub(r"\s*\n\s*", " ", body) + "`"
+    text = re.sub(r"```.*?```|(?<!`)`([^`]+)`(?!`)", join, text, flags=re.S)
+    out = []
+    for raw in text.splitlines():
+        line = raw.strip().lstrip("#").strip()
+        out += [(raw.strip(), body) for body in command_hits(line)]
+    return out
+
+
+def flags_named(entry):
+    """The flags a help entry names, as whole tokens — `--task-brief-file` is not `--task-brief`."""
+    return set(re.findall(r"(?<![\w-])--[a-z][\w-]*", entry))
 
 
 def doc_command_lines():
@@ -3332,23 +3381,37 @@ def doc_command_lines():
     """
     out = []
     for rel in DOCS:
-        text = read_text(os.path.join(ROOT, rel))
-        text = text.replace("\\\n", " ")                     # fenced line continuations
-        for raw in text.splitlines():
-            line = raw.strip().lstrip("#").strip()
-            for body in command_hits(line):
-                out.append((rel, raw.strip(), body))
+        out += [(rel, raw, body) for raw, body in prose_hits(read_text(os.path.join(ROOT, rel)))]
+    # The evals are the agent's behavioural spec and name the CLI as densely as the prose;
+    # an expected output that names a flag the CLI lacks grades the agent against fiction.
+    out += evals_hits(json.loads(read_text(os.path.join(ROOT, "evals", "evals.json")))["evals"])
     return out
 
 
-def assert_invocations_parse(lines):
-    """Hand every named invocation to the real parser; collect what it will not accept."""
+def evals_hits(evals):
+    """Invocations in the evals' prompts and expected outputs, read as any document is.
+
+    Through prose_hits: line by line, a wrapped span joined. Handed to command_hits whole,
+    a span's whitespace class ran across a line break and swallowed the next line into it.
+    """
+    return [(f"evals/evals.json#{e.get('id')}.{field}", raw, body)
+            for e in evals for field in ("prompt", "expected_output")
+            for raw, body in prose_hits(e.get(field, ""))]
+
+
+def assert_invocations_parse(lines, failures=None):
+    """Hand every named invocation to the real parser; collect what it will not accept.
+
+    Failures go to `failures` (the suite's list by default), so a case can run it on planted
+    lines without editing the global list it is itself being judged by.
+    """
+    failures = FAILURES if failures is None else failures
     parser = module().build_parser()
     for rel, raw, body in lines:
         try:
             tokens = shlex.split(body)
         except ValueError:
-            FAILURES.append(f"{rel}: unparseable command line: {raw}")
+            failures.append(f"{rel}: unparseable command line: {raw}")
             continue
         if not tokens:
             continue
@@ -3362,12 +3425,20 @@ def assert_invocations_parse(lines):
         # that the name exists instead.
         if len(tokens) == 1 or (len(tokens) == 2 and tokens[0] == "project"):
             if " ".join(tokens) not in SUBCOMMANDS:
-                FAILURES.append(f"{rel}: `{raw}` names no such subcommand")
+                failures.append(f"{rel}: `{raw}` names no such subcommand")
             continue
-        tokens = [PLACEHOLDERS.get(tokens[i - 1], t) if t == "..." and i else t
+        # A placeholder is `...`, `ARG` (from `<...>` or an f-string interpolation) or an
+        # all-caps word as the help writes them (`--findings N`). After a flag with choices it
+        # takes that flag's accepted value, whichever form it has; anywhere else it is also
+        # tried as a number. The CLI has no upper-case choice or subcommand to mistake.
+        def placeholder(t):
+            return t == "..." or re.fullmatch(r"[A-Z][A-Z_]*", t) is not None
+        tokens = [PLACEHOLDERS.get(tokens[i - 1], t) if i and placeholder(t) else t
                   for i, t in enumerate(tokens)]
         fill = [PLACEHOLDERS[tokens[-1]]] if tokens[-1] in PLACEHOLDERS else ["ARG"]
-        for attempt in (tokens, tokens + fill, tokens + ["1"]):
+        numbered = ["1" if placeholder(t) else t for t in tokens]
+        for attempt in (tokens, tokens + fill, tokens + ["1"], numbered, numbered + fill,
+                        numbered + ["1"]):
             buf = _io.StringIO()
             try:
                 with contextlib.redirect_stderr(buf), contextlib.redirect_stdout(buf):
@@ -3376,15 +3447,28 @@ def assert_invocations_parse(lines):
             except (SystemExit, argparse.ArgumentError):
                 last = buf.getvalue().strip().splitlines()[-1:] or [""]
         else:
-            FAILURES.append(f"{rel}: `{raw}` is not accepted by the CLI ({last})")
+            failures.append(f"{rel}: `{raw}` is not accepted by the CLI ({last})")
 
 
 @case
-def every_command_in_the_prose_exists_in_the_cli():
-    """The prose is executed by a model; a flag it names that the CLI lacks is a dead end,
-    and exercising the script cannot catch it."""
-    lines = doc_command_lines()
-    ok(len(lines) >= 12, f"expected the prose to show the command surface, found {len(lines)}")
+def every_invocation_from_every_source_exists_in_the_cli():
+    """Prose, evals and the script's own messages, through one list and one parser.
+
+    The prose is executed by a model, and a flag it names that the CLI lacks is a dead end
+    exercising the script cannot catch. A refusal is the same: `project close` sent the
+    operator to `reset --force`, which `reset` has never accepted, while the plain `reset`
+    it also implied was refused mid-area — the dead end was quoted in a die() string, not in
+    a document. Two cases read two sources each; a source added to `invocations()` is
+    checked here without anyone remembering to.
+    """
+    lines = invocations()
+    seen = {}
+    for src, _, _ in lines:
+        kind = src.split(":")[0].split("#")[0]
+        kind = "script" if kind == "scripts/loop_review.py" else "evals" if kind.startswith("evals") else "prose"
+        seen[kind] = seen.get(kind, 0) + 1
+    ok(seen.get("prose", 0) >= 12 and seen.get("script", 0) >= 10 and seen.get("evals", 0) >= 5,
+       f"every source must contribute to the command surface: {seen}")
     assert_invocations_parse(lines)
 
 
@@ -3700,38 +3784,68 @@ def the_builtin_help_lists_every_flag_the_parser_accepts():
                     out.setdefault(prefix, set()).update(opts)
         return out
 
-    missing = []
-    for cmd, flags in sorted(declared(parser).items()):
+    missing, invented = [], []
+    surface = declared(parser)
+    for cmd, flags in sorted(surface.items()):
         entry = entries.get(cmd)
         if entry is None:
             missing.append(f"{cmd}: not described at all")
             continue
-        for flag in sorted(flags):
-            if flag not in entry:
-                missing.append(f"{cmd}: {flag}")
+        # Flags as tokens, never substrings: `--task-brief` was "described" by
+        # `--task-brief-file`, so either could vanish from the help with this check green.
+        named = flags_named(entry)
+        missing += [f"{cmd}: {flag}" for flag in sorted(flags - named)]
+        # And the other way: a flag the help shows that the parser does not accept.
+        invented += [f"{cmd}: {flag}" for flag in sorted(named - flags - {"--help"})]
     ok(not missing, "flags the parser accepts and the help omits: " + "; ".join(missing))
+    ok(not invented, "flags the help shows and the parser rejects: " + "; ".join(invented))
 
-    # The passport's escape-hatch list is the same claim in prose; keep it honest too.
+    # The passport's escape-hatch list is the same claim in prose; keep it honest too — the
+    # list itself, not the paragraph around it, which names `reset` for another reason.
     passport = read_text(os.path.join(ROOT, "AGENTS.md"))
-    hatches = passport.split("Escape hatches stay explicit")[1].split("- **")[0]
-    for cmd, flags in declared(parser).items():
-        if "--force" in flags:
-            ok(f"`{cmd}`" in hatches,
-               f"AGENTS.md lists the --force surface; `{cmd}` is missing from it")
+    hatches = passport.split("Escape hatches stay explicit")[1]
+    listed = set(re.findall(r"`([a-z][\w -]*)`",
+                            re.search(r"`--force` exists on (.*?);", hatches, re.S).group(1)))
+    forced = {cmd for cmd, flags in surface.items() if "--force" in flags}
+    ok(listed == forced, f"AGENTS.md's --force list must be the parser's: listed {sorted(listed)}, "
+                         f"parser {sorted(forced)}")
 
 
 @case
-def every_command_the_script_recommends_exists_in_the_cli():
-    """A refusal that names the way out is only useful if that way exists.
+def the_invocation_collector_sees_every_form_a_recommendation_takes():
+    """Known cases for the extraction the CLI checks rest on: each form was a blind spot.
 
-    `project close` sent the operator to `reset --force`, which `reset` has never accepted,
-    while the plain `reset` it also implied was refused mid-area — the two commands together
-    left no route out of the state at all. Checking the prose could not see it: the dead end
-    was quoted in a die() string, not in a document.
+    A span wrapped across a line, a command inside an f-string with an interpolation, a
+    flag "named" only as part of a longer one — each passed the checks unseen, so a dead
+    flag there could not fail them. The evals are a source too, and the first run of the
+    collector over them found `--findings N`, a placeholder the parse could not yet read.
     """
-    lines = script_message_lines()
-    ok(len(lines) >= 10, f"expected the messages to name the CLI, found {len(lines)}")
-    assert_invocations_parse(lines)
+    bodies = [b for _, b in prose_hits("close it with `project close\n   --frce` instead")]
+    ok("project close --frce" in bodies, f"a span wrapped across a line is one command: {bodies}")
+    hits = [b for _, _, b in string_hits('def f(c):\n    die(f"use `validate-drop -- {c} --forse`")')]
+    ok(any(b.startswith("validate-drop -- ARG --forse") for b in hits),
+       f"a command inside an f-string is read whole: {hits}")
+    ok("--task-brief" not in flags_named("init [--task-brief-file PATH]"),
+       "a longer flag does not name a shorter one")
+    ok(any(src.startswith("evals/evals.json#") for src, _, _ in invocations()),
+       "the evals are among the sources")
+    found = []
+    assert_invocations_parse([("planted", "x", "pass-record --findings N"),
+                              ("planted", "y", "resolve --fixed ARG"),
+                              ("planted", "v", "amend --test-evidence VERDICT"),
+                              ("planted", "w", "amend --test-evidence ARG"),
+                              ("planted", "z", "reset --frce")], found)
+    ok(len(found) == 1 and "`z`" in found[0],
+       f"placeholders parse wherever they stand, a dead flag does not: {found}")
+    bodies = [b for _, b in prose_hits("Never `reset` inside an area: `project close` frees it.\n"
+                                       "If it is foreign — `project\nclose --frce` settles it, "
+                                       "and `reset` then\nfrees it.")]
+    ok("project close --frce" in bodies,
+       f"a wrapped span after a line with other spans is still joined: {bodies}")
+    found = [b for _, _, b in evals_hits([{"id": 0, "prompt": "Run `project close\n  --frce` "
+                                           "and then `init`\nlater text `x`"}])]
+    ok("project close --frce" in found and not any("later" in b for b in found),
+       f"an eval field is read line by line, a wrapped span joined: {found}")
 
 
 @case
