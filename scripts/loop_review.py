@@ -1040,6 +1040,10 @@ def cmd_init(a):
         "validation": [],
     }
     state["fingerprint_current"] = fp_of(state)
+    # What `[inherited]` is measured against, in every mode a loop can be opened in: missing
+    # here, `init --mode project` fell back to the pre-stamp rule and still called a check
+    # first run after an edit "inherited".
+    state["opened_fingerprint"] = state["fingerprint_current"]
     # Refuse rather than warn, in both modes. A loop on an empty scope passes every gate —
     # validation is green because nothing runs against a change, the fingerprint never
     # moves, and `accept` sees no blocker — so the one thing the script exists to prevent
@@ -1548,9 +1552,10 @@ def cmd_pass_start(a):
         # through: in report-only `project close` insists the findings file exists so they
         # are written down, and in fix mode `accept` still refuses on red, so an area whose
         # inherited failures were not fixed closes `incomplete` with them as its blocker.
-        print("note: opening a project pass over red validation. Tell the reviewer which is "
-              "which — an inherited failure is a property of the area, a regressed one was "
-              "broken inside this loop and is about the change:", file=sys.stderr)
+        print("note: opening a project pass over red validation. Pass each marker on: an "
+              "inherited failure is a property of the area, a regressed one was broken inside "
+              "this loop and is about the change, and one first run after the area changed has "
+              "an origin nobody knows:", file=sys.stderr)
         print_validation(red, "failing checks", state, file=sys.stderr)
         print("  in report-only write them into the findings file; in fix mode they still "
               "block `accept`, so fix them or close the area incomplete with them as the "

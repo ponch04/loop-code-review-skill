@@ -935,6 +935,14 @@ def a_red_check_is_labelled_only_where_the_label_is_true():
     ok("test -z yes  -> exit 1  [first run after the area changed]" in out,
        f"a check first run after the change is not called inherited: {out.strip()[-240:]}")
 
+    d = repo({"pkg/a.py": "x\n"})                                 # opened by init, not project next
+    run("init", "--mode", "project", "--", "pkg", cwd=d, check=True)
+    write(d, "pkg/a.py", "y\n")
+    run("validate", "--", "false", cwd=d)
+    out = run("status", cwd=d, check=True).stdout
+    ok("false  -> exit 1  [first run after the area changed]" in out,
+       f"`init --mode project` stamps the opened area too: {out.strip()[-240:]}")
+
 
 @case
 def report_only_reviews_an_area_whose_checks_are_already_red():

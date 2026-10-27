@@ -11,7 +11,7 @@ You are inheriting this area of the codebase and will be responsible for maintai
 - Everything under those paths is in scope, all of them — except `.loop-review/`, this review loop's own bookkeeping, which you must never read or report on. It holds earlier reviewers' findings, and you are here to reach your own conclusions. Neighbouring code may be read for context; report findings only for code inside the area, or for area code that misuses something outside it.
 
 Validation already run by the author (you may re-run):
-- <command> -> <exit code>, one line each, exactly as `status` prints them. If `status` shows "no executable check applies: <reason>", write that sentence instead — it is not a check that passed, and nothing was run. A failing check is marked `[inherited]` (already failing when the area was handed over — a property of the area) or `[regressed]` (green earlier in this loop, broken by the change under review — a defect in it). Copy the marker; neither is a reason to stop reviewing.
+- <command> -> <exit code>, one line each, exactly as `status` prints them. If `status` shows "no executable check applies: <reason>", write that sentence instead — it is not a check that passed, and nothing was run. A failing check is marked `[inherited]` (already failing when the area was handed over — a property of the area), `[regressed]` (green earlier in this loop, broken by the change under review — a defect in it) or `[first run after the area changed]` (never run on the area as it was handed over, so whether it failed then is unknown — do not call it either). Copy the marker; none is a reason to stop reviewing.
 
 Treat this as a handoff: the original authors are gone.
 
