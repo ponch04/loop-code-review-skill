@@ -768,6 +768,46 @@ def the_ledger_keeps_every_metric_the_pass_recorded():
 
 
 @case
+def widening_the_scope_always_asks_for_a_new_review():
+    """The fingerprint saw a widening only when the added path carried changes.
+
+    `scope -- b.py` for a tracked file with no diff left the last pass current: `accept`
+    signed it off for a path its reviewer was never told about, and `pass-start` refused
+    the new pass as unchanged. A path under an already scoped directory was taken as a
+    widening too. And the ledger wrote `reviewed_paths` only for widened areas.
+    """
+    d = repo({"a.py": "1\n", "b.py": "1\n", "pkg/sub/c.py": "1\n"})
+    write(d, "a.py", "2\n")
+    run("init", "--", "a.py", "pkg", cwd=d, check=True)
+    pass_through(d)
+    ok(run("accept", cwd=d).returncode == 0, "the fixture accepts before the widening")
+    r = run("scope", "--", "pkg/sub/c.py", cwd=d)
+    ok(r.returncode != 0 and "already in scope" in r.stderr and read_state(d)["scope"] == ["a.py", "pkg"],
+       f"a path under a scoped directory is already covered: {r.stderr.strip()[:160]}")
+    before = read_state(d)["fingerprint_current"]
+    run("scope", "--", "b.py", cwd=d, check=True)                  # no diff: fingerprint stays
+    ok(read_state(d)["fingerprint_current"] == before, "the fixture's widening moves no hash")
+    r = run("accept", cwd=d)
+    ok(r.returncode != 0 and "scope widened since pass 1" in r.stdout,
+       f"the pass was told about other paths: {r.stdout.strip()[:200]}")
+    r = run("pass-start", cwd=d)
+    ok(r.returncode == 0, f"and a new pass over the wider scope opens: {r.stderr.strip()[:200]}")
+
+    d = repo({"a/x.py": "1\n", "gone/y.py": "2\n"})
+    run("project", "init", "--report-only", "--", "a", "gone", cwd=d, check=True)
+    run("project", "next", cwd=d, check=True)
+    pass_through(d)
+    findings(d, "a", "A. clean\n")
+    run("project", "close", cwd=d, check=True)
+    sh("git rm -q -r gone && git commit -qm drop", d)
+    run("project", "next", cwd=d)                                  # settles `gone`
+    rows = read_state(d, "project.json")["areas"]
+    ok(rows[0].get("reviewed_paths") == ["a"] and "reviewed_paths" in rows[1]
+       and rows[1]["reviewed_paths"] is None,
+       f"every closed row carries reviewed_paths: {[r.get('reviewed_paths', 'MISSING') for r in rows]}")
+
+
+@case
 def every_closed_ledger_row_has_the_same_shape():
     """`project.json` is the deliverable of a project review, so its rows are a schema.
 
