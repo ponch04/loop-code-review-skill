@@ -953,6 +953,46 @@ def state_dir_inside_scope_does_not_deadlock():
 # ---------------------------------------------------------------------------- fingerprint
 
 @case
+def a_scope_path_is_a_name_not_a_pattern():
+    """After `--`, git reads arguments as pathspecs, and a file name can look like one.
+
+    `:foo` was parsed as pathspec magic, so `git` died and `init` with it; `a[1].py` was a
+    glob that also matched `a1.py`, so a file nobody scoped moved the fingerprint — and was
+    in the reviewed state. Both modes, because both hash through the same pathspecs.
+    """
+    files = {":foo": "1\n", "a[1].py": "1\n", "a1.py": "1\n"}
+    d = repo(files)
+    write(d, ":foo", "2\n")
+    write(d, "a[1].py", "2\n")
+    write(d, "a1.py", "2\n")
+    r = run("init", "--", ":foo", cwd=d)                    # alone: nothing else to hide it
+    ok(r.returncode == 0, f"`:foo` alone is a changed file, not an empty scope: "
+                          f"rc={r.returncode} {r.stderr.strip()[-160:]}")
+    if r.returncode == 0:
+        before = read_state(d)["fingerprint_current"]
+        write(d, ":foo", "3\n")
+        ok(run("fingerprint", cwd=d, check=True).stdout.strip() != before,
+           "and editing it moves the fingerprint")
+        write(d, ":foo", "2\n")
+    r = run("init", "--force", "--", ":foo", "a[1].py", cwd=d)
+    ok(r.returncode == 0 and read_state(d)["scope"] == [":foo", "a[1].py"],
+       f"a path starting with `:` is a file name: rc={r.returncode} {r.stderr.strip()[-160:]}")
+    if r.returncode == 0:
+        before = read_state(d)["fingerprint_current"]
+        write(d, "a1.py", "3\n")                                   # outside the scope
+        ok(run("fingerprint", cwd=d, check=True).stdout.strip() == before,
+           "a file a glob would match, but nobody scoped, must not move the fingerprint")
+
+    d = repo(files)
+    run("project", "init", "--", "a[1].py", cwd=d, check=True)
+    run("project", "next", cwd=d, check=True)
+    before = read_state(d)["fingerprint_current"]
+    write(d, "a1.py", "2\n")
+    ok(run("fingerprint", cwd=d, check=True).stdout.strip() == before,
+       "project mode: an area named like a glob is that one file")
+
+
+@case
 def a_link_in_scope_is_the_link_not_its_target():
     """A tracked symlink — this repository's own `CLAUDE.md -> AGENTS.md` — is an entry of
     its own, both when it is named and when it is hashed.

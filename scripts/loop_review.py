@@ -280,6 +280,17 @@ def outside_state_dir(path):
     return p != STATE_DIR and not p.startswith(STATE_DIR + os.sep) and not p.startswith(STATE_DIR + "/")
 
 
+def literal(paths):
+    """User paths as *literal* pathspecs, for every git call that takes them.
+
+    After `--`, git still reads its arguments as pathspecs: a file named `:foo` was parsed
+    as magic and `git` died, and one named `a[1].py` or `*.py` matched as a glob — files the
+    operator never scoped entered the fingerprint and the review. `--literal-pathspecs` would
+    also disarm the script's own `:(exclude)` items, so each user path carries `:(literal)`.
+    """
+    return [":(literal)" + os.fsdecode(p) for p in paths]
+
+
 def scoped(paths):
     """Pathspecs for `git diff`, where a `:(exclude)` item is safe and does what it says.
 
@@ -291,7 +302,7 @@ def scoped(paths):
     excludes its own bookkeeping rather than relying on the reviewed repository to gitignore
     it. `ls-files` callers must use `outside_state_dir()` instead — see there.
     """
-    return [*paths, f":(exclude,glob){STATE_DIR}/**", f":(exclude){STATE_DIR}"]
+    return [*literal(paths), f":(exclude,glob){STATE_DIR}/**", f":(exclude){STATE_DIR}"]
 
 
 def scope_files(paths, untracked_only=False):
@@ -312,7 +323,7 @@ def scope_files(paths, untracked_only=False):
     state unchanged — a dead end; a link was hashed as whatever it pointed at.
     """
     flags = ["--others"] if untracked_only else ["--cached", "--others"]
-    out = git("ls-files", "-z", *flags, "--exclude-standard", "--", *paths)
+    out = git("ls-files", "-z", *flags, "--exclude-standard", "--", *literal(paths))
     files = []
     for p in sorted({p for p in out.split(b"\0") if p and outside_state_dir(p)}):
         try:
@@ -394,7 +405,7 @@ def unseen_paths(paths, mode="changes", base=None):
         args = ["ls-files", "-z", "--cached", "--others"]
         if exclude_ignored:
             args.append("--exclude-standard")
-        return [x for x in git(*args, "--", p).split(b"\0") if x]
+        return [x for x in git(*args, "--", *literal([p])).split(b"\0") if x]
 
     out = []
     for p in paths:
