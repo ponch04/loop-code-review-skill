@@ -1367,6 +1367,28 @@ def reset_survives_odd_shapes_and_says_why_the_directory_stays():
     ok(os.path.isdir(os.path.join(sd, "findings")), "the findings reports are kept")
     ok("kept" in r.stdout and "findings/" in r.stdout,
        f"reset must say the directory stays, and why: {r.stdout.strip()[:300]}")
+    ok(".loop-review/state.json.tmp is a directory" in r.stdout,
+       f"and name the directory it would not delete: {r.stdout.strip()[:300]}")
+
+    # Without findings to explain it, the directory must still be named — not "not empty".
+    d = repo({"a.py": "1\n"})
+    write(d, "a.py", "2\n")
+    run("init", "--", "a.py", cwd=d, check=True)
+    os.makedirs(os.path.join(d, ".loop-review", "project.json.tmp"))
+    r = run("reset", cwd=d)
+    ok(r.returncode == 0 and ".loop-review/project.json.tmp is a directory" in r.stdout
+       and "not empty" not in r.stdout,
+       f"a lone directory at an artifact name must be named: {r.stdout.strip()[:300]}")
+
+    # A directory at project.json is no ledger, and `reset --project` cannot remove it: say
+    # neither "no ledger" nor "run `reset --project`", which is the command that just ran.
+    d = repo({"a.py": "1\n"})
+    os.makedirs(os.path.join(d, ".loop-review", "project.json"))
+    r = run("reset", "--project", cwd=d)
+    both = r.stdout + r.stderr
+    ok(r.returncode == 0 and ".loop-review/project.json is a directory" in r.stdout
+       and "no project ledger to clear" not in both and "`reset --project` discards" not in both,
+       f"a directory at project.json must be named, not advised away: {both.strip()[:400]}")
 
 
 @case

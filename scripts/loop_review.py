@@ -1720,6 +1720,11 @@ def own_artifacts():
     return (STATE_FILE, STATE_FILE + ".tmp", PROJECT_FILE, PROJECT_FILE + ".tmp", FINDINGS_DIR)
 
 
+def is_odd_artifact(path):
+    """A real directory where this script keeps a file: never removed, always named."""
+    return os.path.isdir(path) and not os.path.islink(path)
+
+
 def remove_artifact(path):
     """Remove one of this script's files; True if something was removed.
 
@@ -1730,7 +1735,7 @@ def remove_artifact(path):
     """
     if not os.path.lexists(path):
         return False
-    if os.path.isdir(path) and not os.path.islink(path):
+    if is_odd_artifact(path):
         return False                                     # named in the closing note
     try:
         os.remove(path)
@@ -1766,7 +1771,7 @@ def cmd_reset(a):
     if a.project:
         if remove_artifact(PROJECT_FILE):
             print("project ledger cleared")
-        else:
+        elif not is_odd_artifact(PROJECT_FILE) and not os.path.lexists(PROJECT_FILE):
             print("no project ledger to clear")
     # A `.tmp` can survive a crash between write and replace; it is debris, never the file
     # itself, so both are cleared whatever `--project` says. Only `project.json` is a record
@@ -1777,7 +1782,10 @@ def cmd_reset(a):
     # a plain `project close` both refuse afterwards, and only `project close --force` can
     # settle it. Say so here, while the operator is still looking, instead of after two
     # failed commands.
-    if os.path.exists(PROJECT_FILE):
+    # A ledger only when it is one: a directory at the name is no ledger, and after
+    # `--project` failed to remove the file, advising `reset --project` sends the operator
+    # back to the command that just could not do it. Both are named in the closing note.
+    if os.path.isfile(PROJECT_FILE) and not a.project:
         try:
             stranded = next((x for x in read_json(PROJECT_FILE)["areas"] if x["status"] == "in_progress"), None)
         except (OSError, ValueError, KeyError):
@@ -1802,12 +1810,19 @@ def cmd_reset(a):
             why = []
             if os.path.basename(FINDINGS_DIR) in left:
                 why.append("findings/ holds the per-area review reports, kept on purpose")
-            if os.path.basename(PROJECT_FILE) in left:
+            if os.path.isfile(PROJECT_FILE) and not a.project:
                 why.append("project.json is the ledger (`reset --project` discards it)")
+            elif os.path.isfile(PROJECT_FILE):
+                why.append("project.json could not be removed (see the note above)")
             if any(x not in ours for x in left):
                 why.append("it holds files this script did not create")
-            if os.path.isdir(STATE_FILE):
-                why.append(f"{STATE_FILE} is a directory, not a loop state — remove it by hand")
+            # Every name `remove_artifact` left standing because it is a directory, not only
+            # `state.json`: the one it skipped in the case that reached review was `.tmp`.
+            odd = [f for f in own_artifacts() if f != FINDINGS_DIR and is_odd_artifact(f)]
+            if odd:
+                why.append(", ".join(odd) + (" is a directory" if len(odd) == 1 else
+                                             " are directories")
+                           + " where this script keeps a file — not its to delete, remove by hand")
             print(f"note: {STATE_DIR}/ kept — " + "; ".join(why or ["it is not empty"])
                   + ". Mention it in the report; delete it once nothing in it is needed")
     print("state cleared")
