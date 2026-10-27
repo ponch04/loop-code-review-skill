@@ -63,7 +63,7 @@ frees it.
 
 If a fix lands outside the area — the reviewer named the cause in a neighbouring file — widen
 the loop with `scope --` exactly as in task mode, so the next pass covers it. Say so in the
-report: the ledger records the widened paths as `reviewed_paths`, and if the file belongs to an
+report: the ledger records the paths actually reviewed — widened ones included — as `reviewed_paths`, and if the file belongs to an
 area already closed, that area's outcome no longer describes what is on disk, so name it as a
 residual risk. In `--report-only` nothing is fixed, so this cannot arise.
 

@@ -555,6 +555,19 @@ def terms_of(state):
     return hashlib.sha256(blob).hexdigest()[:16]
 
 
+def scope_moved(state, lp):
+    """True when `lp` was reviewed over other paths than the loop's scope now lists.
+
+    The reviewer is given the scope's paths, so they are part of what a review was asked.
+    The fingerprint caught a widening only when the added path carried changes: a tracked
+    file with no diff, or an empty path under --allow-empty, widened the scope with the old
+    pass still "current" — `accept` signed it off for paths no reviewer was told about, and
+    `pass-start` refused the new pass as unchanged. Passes stamped before the field are not
+    second-guessed.
+    """
+    return "scope" in lp and lp["scope"] != state["scope"]
+
+
 def terms_moved(state, lp):
     """True when `lp` was reviewed against other terms. Passes stamped before the field
     existed carry no record of what they were given, and are not second-guessed."""
@@ -861,6 +874,9 @@ def review_integrity(state, phrasing="loop"):
     if terms_moved(state, lp):
         out.append(f"the brief or scope note changed since pass {lp['n']}, so that review "
                    "was given other terms; open a new pass")
+    if scope_moved(state, lp):
+        out.append(f"the scope widened since pass {lp['n']}, so that review was told about "
+                   "other paths; open a new pass")
     # Condition 1's floor, asked of both modes. Report-only does not need the checks green —
     # an area is reviewed as it stands — but it needs them to *exist*: `validate-drop --none`
     # or a retracted record could leave the reviewed state with no validation at all, and a
@@ -1180,9 +1196,13 @@ def cmd_scope(a):
     os.chdir(root)
     state = load()
     refuse_if_open(state, "scope", "what is under review")
-    new = [x for x in dict.fromkeys(added) if x not in state["scope"]]
+    # Covered, not just listed: `pkg/sub/a.py` beside `pkg` (or anything beside `.`) is
+    # already reviewed, and comparing strings let it in as a "widening" that moved nothing.
+    def covered(x):
+        return any(p == "." or x == p or x.startswith(p.rstrip("/") + "/") for p in state["scope"])
+    new = [x for x in dict.fromkeys(added) if not covered(x)]
     if not new:
-        die("every path given is already in scope")
+        die("every path given is already in scope (named, or under a scoped directory)")
     warn_unseen(new, state.get("mode", "changes"), state.get("base"))
     before = fp_of(state)
     state["scope"] = state["scope"] + new
@@ -1191,7 +1211,9 @@ def cmd_scope(a):
     print(f"scope widened by {len(new)} path(s):")
     for x in new:
         print(f"  + {x}")
-    if state["fingerprint_current"] != before:
+    # Stale whenever a review exists, whether or not the fingerprint moved: the paths a
+    # reviewer is told about are part of what was asked (`scope_moved`).
+    if last_recorded_pass(state) is not None or state["fingerprint_current"] != before:
         # "The last review is stale" is only true when there is one; before the first pass the
         # same move just means the first reviewer must see the wider scope.
         if last_recorded_pass(state) is not None:
@@ -1454,7 +1476,7 @@ def pass_start_blockers(state, force=False):
     # Unchanged means the code *and* the terms: a new brief is a new question about the
     # same code, and refusing it as "unchanged" left the old review standing for both.
     if (lp and lp["fingerprint"] == state["fingerprint_current"]
-            and not terms_moved(state, lp) and not force):
+            and not terms_moved(state, lp) and not scope_moved(state, lp) and not force):
         out.append(("unchanged", lp))
     if not state.get("allow_empty") and scope_is_empty(state["scope"],
                                                        state.get("mode", "changes"),
@@ -1563,7 +1585,7 @@ def cmd_pass_start(a):
     # What the pass rested on, fixed now: later runs on this fingerprint and later
     # retirements must not rewrite it (`pass_evidence`).
     entry = {"n": n, "opened": now(), "fingerprint": state["fingerprint_current"],
-             "terms": terms_of(state), "result": None,
+             "terms": terms_of(state), "scope": list(state["scope"]), "result": None,
              "rested_on": sorted(evidence_set(validation_at(state, state["fingerprint_current"])))}
     if red:
         entry["opened_over_red"] = [v["cmd"] for v in red]
@@ -2202,7 +2224,7 @@ def parse_areas(raw, root):
 # `project close` and in `settle_area`, and both dropped `test_score` and `note`: the area
 # prompt asks for a test quality score, SKILL.md's report quotes it from `project status
 # --json`, and `project close` deleted the only copy with `state.json`.
-LEDGER_METRICS = ("passes", "findings", "resolved", "total_findings", "total_resolved", "score",
+LEDGER_METRICS = ("reviewed_paths", "passes", "findings", "resolved", "total_findings", "total_resolved", "score",
                   "test_score", "test_evidence", "understood", "note", "findings_file")
 
 
@@ -2517,8 +2539,10 @@ def cmd_project_close(a):
     cur["closed"] = now()
     # The loop's scope, not the queued paths: `scope --` may have widened the area when a fix
     # landed next door, and the ledger is the deliverable — it must say what was reviewed.
-    if state["scope"] != area_paths(cur):
-        cur["reviewed_paths"] = state["scope"]
+    # Every closed row carries it — equal to the queued paths unless `scope --` widened the
+    # loop. Written only when they differed, it gave rows two shapes, and the ledger is a
+    # document consumers index by key.
+    cur["reviewed_paths"] = list(state["scope"])
     cur["passes"] = len(state["passes"])
     # Two questions, two fields — the single summed pair answered neither. `findings` /
     # `resolved` are the last recorded pass's: what acceptance was judged on, so an area
