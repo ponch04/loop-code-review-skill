@@ -2312,6 +2312,28 @@ def a_blank_path_argument_is_refused_not_read_as_the_cwd():
 
 
 @case
+def a_check_killed_by_a_signal_reports_one_status_everywhere():
+    """A shell killed by signal N returns -N to Python, and that number leaked three ways.
+
+    The record and the message said `exit -9`; `sys.exit(-9)` left the script with 247. SKILL
+    says `validate` "exits with its status", and a caller reading `$?` saw a third value. The
+    shell convention, 128+N, is what all three now carry; the signal is recorded beside it.
+    """
+    d = repo()
+    write(d, "a.py", "v2\n")
+    run("init", "--", "a.py", cwd=d, check=True)
+    r = run("validate", "--", "kill -9 $$", cwd=d)
+    rec = read_state(d)["validation"][-1]
+    ok(r.returncode == 137 and rec["exit"] == 137 and rec.get("signal") == 9,
+       f"exit status, record and signal must agree: rc={r.returncode} {rec}")
+    ok("exit 137" in r.stdout and "SIGKILL" in r.stdout,
+       f"the message must name the status and the signal: {r.stdout.strip()[-120:]}")
+    r = run("pass-start", cwd=d)
+    ok(r.returncode != 0 and "validation is red" in r.stderr,
+       f"a killed check is red, not 'never ran': {r.stderr.strip()[:160]}")
+
+
+@case
 def argument_values_are_validated():
     d = repo()
     write(d, "a.py", "v2\n")
