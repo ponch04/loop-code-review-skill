@@ -1845,10 +1845,15 @@ def cmd_accept(a):
         # aborted one counts as used. With every pass aborted there is no recorded pass at
         # all, which is exactly when the operator most needs to be told that the loop has
         # run out — otherwise the only hint comes from the next `pass-start` refusing.
-        if len(state["passes"]) >= state["max_passes"]:
+        # Asked of the gates, not of a copy of their condition: with the last allowed pass
+        # *open*, `len(passes)` already equals the limit, and the note told the operator to
+        # report INCOMPLETE — and, with nothing recorded yet, that "every pass was aborted" —
+        # one line under the blocker saying that very pass can still be recorded.
+        if open_pass(state) is None and any(k == "limit" for k, _ in pass_start_blockers(state)):
+            aborted = all(x.get("aborted") for x in state["passes"])
             print(f"pass limit reached ({state['max_passes']}) — report as INCOMPLETE"
                   + ("; every pass was aborted, and an aborted pass counts as used"
-                     if lp is None else ""))
+                     if aborted else ""))
         sys.exit(1)
     print(f"ACCEPTED after {len(state['passes'])} pass(es); "
           f"last score {metric(lp['result']['score'])} (progress signal only)")
