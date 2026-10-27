@@ -2115,6 +2115,18 @@ def cmd_project_init(a):
     blocked = open_loop_way_out(prior)
     if blocked:
         die(blocked)
+    # The same question with the loop state already gone: `open_loop_way_out` only sees a
+    # `state.json` that exists, and with it lost `--force` silently replaced a ledger whose
+    # finished areas are the review's whole output — the one thing evals 14 and 15 say the
+    # agent must not do. The documented recovery keeps them; starting over stays possible,
+    # but as two explicit commands, not as a side effect of re-queueing.
+    stuck = next((x for x in (prior or {}).get("areas", []) if x.get("status") == "in_progress"), None)
+    if stuck is not None:
+        die(f"area `{area_name(stuck)}` is in progress and its loop state is gone — "
+            "`project close --force` settles it `incomplete`, keeps every outcome already "
+            "recorded, and the queue continues with `project next`. To discard the review "
+            "instead: `reset --project`, then `project init`.")
+    done = [x for x in (prior or {}).get("areas", []) if x.get("status") not in ("pending", "in_progress")]
     # Every area is checked here, before any of them is reviewed: a mistyped or renamed
     # path matches no file, and an area nobody can read still passes every gate and closes
     # as `accepted`. Checking at queue time reports all the bad paths at once, while the
@@ -2136,6 +2148,10 @@ def cmd_project_init(a):
         "areas": [{"paths": x, "status": "pending"} for x in areas],
     }
     save_project(p)
+    if done:
+        # `--force` is the human's "start over"; say what it cost, once it has happened.
+        print(f"note: --force discarded {len(done)} recorded area outcome(s) from the previous "
+              f"ledger; their findings files stay in {FINDINGS_DIR}/", file=sys.stderr)
     print(f"project review queued: {len(areas)} area(s), {a.max_passes} passes each, "
           + ("report-only (no fixes)" if a.report_only else "fix mode"))
     for x in areas:
