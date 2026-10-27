@@ -977,6 +977,12 @@ def a_link_in_scope_is_the_link_not_its_target():
     ok(r.returncode == 0 and read_state(d)["scope"] == ["CLAUDE.md", "AGENTS.md", "OUT.md"],
        f"a path through a symlinked directory names the link, not its target: rc={r.returncode} "
        f"{read_state(d).get('scope') if r.returncode == 0 else r.stderr.strip()[:160]}")
+    # The link *into* the repository is an entry point, not an entry: `/via/repo` is the
+    # root, and `/via/repo/area` reached the same way is `area`.
+    r = run("init", "--force", "--mode", "project", "--", hop, os.path.join(hop, "area"), cwd=d)
+    ok(r.returncode == 0 and read_state(d)["scope"] == [".", "area"],
+       f"a link to the repository root resolves to `.`: rc={r.returncode} "
+       f"{read_state(d).get('scope') if r.returncode == 0 else r.stderr.strip()[:160]}")
 
     m = module()
     cwd = os.getcwd()
