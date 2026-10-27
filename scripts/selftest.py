@@ -3324,6 +3324,54 @@ def a_clean_report_only_area_still_leaves_its_review_behind():
 
 
 @case
+def both_modes_ask_for_the_findings_file_by_the_same_rule():
+    """Required exactly when a recorded review the reviewer understood exists — both modes.
+
+    Report-only skipped the file whenever any blocker stood, so a real review over an area
+    that had moved since — or under a newer, open pass — was deleted with
+    `findings_file: null`. Fix mode demanded a file for a pass that showed no understanding,
+    stalling an area AGENTS.md says to settle `incomplete`.
+    """
+    def area(report_only, understood=True):
+        d = repo({"pkg/a.py": "x\n"})
+        run("project", "init", *(["--report-only"] if report_only else []), "--", "pkg",
+            cwd=d, check=True)
+        run("project", "next", cwd=d, check=True)
+        run("validate", "--", "true", cwd=d)
+        run("pass-start", cwd=d, check=True)
+        run("pass-record", "--score", "7", "--findings", "2", "--test-evidence", "trusted",
+            *(["--understood"] if understood else []), cwd=d, check=True)
+        return d
+
+    for label, after in (("the area moved", lambda d: write(d, "pkg/a.py", "y\n")),
+                         ("a newer pass is open",
+                          lambda d: run("pass-start", "--force", cwd=d, check=True))):
+        for report_only in (True, False):
+            d = area(report_only)
+            after(d)
+            mode = "report-only" if report_only else "fix mode"
+            r = run("project", "close", cwd=d)
+            ok(r.returncode != 0 and "is missing" in r.stderr,
+               f"{mode}, {label}: a real review must be written down before close deletes it: "
+               f"rc={r.returncode} {r.stderr.strip()[:160]}")
+            findings(d, "pkg", "A. two findings\nB. understood\n")
+            run("project", "close", cwd=d, check=True)
+            row = read_state(d, "project.json")["areas"][0]
+            ok(row["status"] == "incomplete" and row["findings_file"],
+               f"{mode}, {label}: it closes incomplete with its findings kept: {row}")
+
+    for report_only in (True, False):
+        d = area(report_only, understood=False)
+        mode = "report-only" if report_only else "fix mode"
+        r = run("project", "close", cwd=d)
+        row = read_state(d, "project.json")["areas"][0] if r.returncode == 0 else {}
+        ok(r.returncode == 0 and row.get("status") == "incomplete"
+           and any("understanding" in b for b in row.get("blockers", [])),
+           f"{mode}: a pass without understanding settles incomplete, no file demanded: "
+           f"rc={r.returncode} {r.stderr.strip()[:160]}")
+
+
+@case
 def an_unreviewable_area_does_not_stall_the_queue():
     """The reviewer never produced a usable pass. That is an outcome, not a hatch case."""
     d = repo({"pkg/a.py": "x\n", "lib/b.py": "y\n"})

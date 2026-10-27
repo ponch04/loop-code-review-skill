@@ -48,7 +48,7 @@ there too, but `accept` still refuses on it: fix it as part of the area, or clos
 
 ## Closing
 
-`project close` refuses in **both** modes while the findings file is missing or blank (an empty or whitespace-only file, or a directory at that path, is no review). The path repeats
+`project close` refuses in **both** modes while a recorded review the reviewer understood has no findings file, or a blank one — even if the area has moved since or a later pass is open, because its findings are real (an empty or whitespace-only file, or a directory at that path, is no review). The path repeats
 on every review of an area, so `project next` moves any earlier review aside to
 `<slug>.prev.md` before the loop opens: whatever is at the live path was written during *this*
 review, and an identical verdict on a second clean run is fine. Write this reviewer's whole

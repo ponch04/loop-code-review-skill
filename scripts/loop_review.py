@@ -2256,6 +2256,21 @@ def cmd_project_close(a):
     lp = last_recorded_pass(state)
     ffile = os.path.join(FINDINGS_DIR, area_slug(cur) + ".md")
     r = lp.get("result") if lp else None
+    # One rule for both modes: the findings file is required exactly when a recorded review
+    # the reviewer *understood* exists, because closing deletes the only other copy of it.
+    # Its findings are real even if the area has since moved, its files are gone, or a later
+    # pass is open — it closes `incomplete` then, but its text must survive. A pass without
+    # understanding was never a review, and an area with no recorded pass has nothing to
+    # keep; refusing those would only stall the queue. The two modes asked this differently:
+    # report-only skipped the file whenever any blocker stood, so a real review over an area
+    # that had since moved was deleted with `findings_file: null`, and fix mode demanded a
+    # file for a review that had shown no understanding at all.
+    missing = findings_problem(ffile) if r and r.get("understood") else None
+    if missing and not a.force:
+        die(f"cannot close area: {ffile} {missing} — write this reviewer's whole output "
+            "there; closing deletes the loop state, so nothing else survives (--force closes "
+            "it as incomplete instead, losing the review)")
+    lost = [f"{ffile} {missing} — the review did not survive the close"] if missing else []
     if p["report_only"]:
         # Two kinds of problem, and conflating them is what stalled the queue. A missing
         # findings file is fixable right now — refuse, so the review is written down before
@@ -2267,38 +2282,16 @@ def cmd_project_close(a):
         # review with no pass, no understanding, or one describing code that has since moved
         # is not a review in either mode, and keeping the list in one place is what stops the
         # two from drifting apart again.
-        terminal = review_integrity(state, "area")
-        fixable = []
-        # Required whatever the finding count: closing deletes state.json, so this file is
-        # the only surviving record of the review — for a clean area it is the *entire*
-        # record, and skipping it loses the understanding summary, the test-evidence basis
-        # and the score rationale for exactly the areas with no findings to remember them by.
-        missing = None if terminal else findings_problem(ffile)
-        if missing:
-            fixable.append(
-                f"{ffile} {missing} — write *this* "
-                "reviewer's whole output there; closing deletes the loop state, so nothing "
-                "else survives")
-        if fixable and not a.force:
-            die("cannot close area: " + "; ".join(fixable)
-                + " (--force closes it as incomplete instead, losing the review)")
-        problems = terminal + fixable
+        # Required whatever the finding count: for a clean area the file is the *entire*
+        # record — the understanding summary, the test-evidence basis, the score rationale.
+        problems = review_integrity(state, "area") + lost
         cur["status"] = "reviewed" if not problems else "incomplete"
         cur["blockers"] = problems
     else:
-        reasons = blockers(state)
-        # The findings file is required here for the same reason as in report-only: closing
-        # deletes `state.json`, so for a clean area that file is the entire surviving record
-        # of the review — its understanding summary, test-evidence basis and score rationale.
-        missing = findings_problem(ffile) if r else None
-        if missing:
-            if not a.force:
-                die(f"cannot close area: {ffile} {missing} — write this reviewer's whole output there; closing deletes the loop state, so "
-                    "nothing else survives (--force closes it as incomplete instead, losing the review)")
-            # Forcing past it cannot leave the area `accepted`: the record the row would rest
-            # on is exactly what was never written, and `--force` never lets an area pass —
-            # here as in report-only, it settles the area with the reason attached.
-            reasons = reasons + [f"{ffile} {missing} — the review did not survive the close"]
+        # Forcing past a missing file cannot leave the area `accepted`: the record the row
+        # would rest on is exactly what was never written, and `--force` never lets an area
+        # pass — in either mode it settles the area with the reason attached.
+        reasons = blockers(state) + lost
         cur["status"] = "accepted" if not reasons else "incomplete"
         cur["blockers"] = reasons
     cur["closed"] = now()
