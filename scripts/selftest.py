@@ -389,7 +389,9 @@ def a_tracked_file_deleted_on_disk_is_warned_about_only_where_it_is_invisible():
             ("git rm", lambda d: sh("git rm -q gone.py", d), ()),
             ("git mv", lambda d: sh("git mv gone.py moved.py", d), ()),
             ("committed since --base",
-             lambda d: sh("git rm -q gone.py && git commit -qm drop", d), ("--base", "HEAD~1"))):
+             lambda d: sh("git rm -q gone.py && git commit -qm drop", d), ("--base", "HEAD~1")),
+            ("a rename committed since --base",
+             lambda d: sh("git mv gone.py moved.py && git commit -qm mv", d), ("--base", "HEAD~1"))):
         err, _ = changes_init(setup, *args)
         ok("gone.py" not in err, f"{label}: the deletion is in the diff, so no warning: {err.strip()[:200]}")
 
