@@ -690,6 +690,41 @@ def a_nested_area_closes_on_the_findings_file_the_script_names():
 
 
 @case
+def the_ledger_reports_the_last_pass_and_the_history_apart():
+    """Summed over passes, the ledger's findings contradicted the outcome it sat beside.
+
+    Pass 1 named two findings, one was resolved, the fix batch moved the area, and pass 2
+    came back clean: `accept` judged pass 2, the area closed `accepted` — and the row read
+    `findings 1/2`, an accepted area with an open finding. The last pass and the history
+    are two answers; each gets its own field.
+    """
+    d = repo({"pkg/a.py": "x\n"})
+    run("project", "init", "--", "pkg", cwd=d, check=True)
+    run("project", "next", cwd=d, check=True)
+    run("validate", "--", "true", cwd=d)
+    run("pass-start", cwd=d, check=True)
+    run("pass-record", "--score", "7", "--findings", "2", "--understood",
+        "--test-evidence", "trusted", cwd=d, check=True)
+    run("resolve", "--fixed", "1", cwd=d, check=True)
+    write(d, "pkg/a.py", "y\n")                                 # the fix batch
+    run("validate", "--", "true", cwd=d)
+    run("pass-start", cwd=d, check=True)
+    run("pass-record", "--score", "9.5", "--findings", "0", "--understood",
+        "--test-evidence", "trusted", cwd=d, check=True)
+    findings(d, "pkg", "A. clean on the second pass\n")
+    run("project", "close", cwd=d, check=True)
+    row = read_state(d, "project.json")["areas"][0]
+    ok(row["status"] == "accepted" and (row["findings"], row["resolved"]) == (0, 0),
+       f"findings/resolved are the pass acceptance judged: {row}")
+    ok((row.get("total_findings"), row.get("total_resolved")) == (2, 1),
+       f"and the history is kept beside them: {row}")
+    line = next(l for l in run("project", "status", cwd=d, check=True).stdout.splitlines()
+                if l.startswith("  ["))
+    ok("findings 0/0" in line and "over all passes 1/2" in line,
+       f"the text ledger shows both, labelled: {line}")
+
+
+@case
 def the_ledger_keeps_every_metric_the_pass_recorded():
     """`project close` deletes state.json, so a metric the row does not copy is gone.
 

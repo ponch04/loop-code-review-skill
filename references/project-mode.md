@@ -75,6 +75,11 @@ closes on whatever it has. An area whose paths no longer match any file on disk 
 by `project next` itself, which exits 2 — run `project next` again for the one behind it. **Never stop the
 project on one stuck area.**
 
+In the ledger, `findings` / `resolved` are the **last recorded pass's** — the review the
+outcome was judged on — and `total_findings` / `total_resolved` sum every pass, which is the
+area's history. Report the first pair as the area's state; findings are counts, so a finding a
+later reviewer named again appears once per pass in the totals.
+
 ## P2. Resume
 
 `project status` shows where it stopped. If an area is still `in_progress`, `project next`

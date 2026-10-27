@@ -2058,8 +2058,8 @@ def parse_areas(raw, root):
 # `project close` and in `settle_area`, and both dropped `test_score` and `note`: the area
 # prompt asks for a test quality score, SKILL.md's report quotes it from `project status
 # --json`, and `project close` deleted the only copy with `state.json`.
-LEDGER_METRICS = ("passes", "findings", "resolved", "score", "test_score", "test_evidence",
-                  "understood", "note", "findings_file")
+LEDGER_METRICS = ("passes", "findings", "resolved", "total_findings", "total_resolved", "score",
+                  "test_score", "test_evidence", "understood", "note", "findings_file")
 
 
 def pass_summary(n, r):
@@ -2358,11 +2358,16 @@ def cmd_project_close(a):
     if state["scope"] != area_paths(cur):
         cur["reviewed_paths"] = state["scope"]
     cur["passes"] = len(state["passes"])
-    # Totals across every pass of this area: a fixed finding from pass 1 is part of the
-    # area's story even though pass 2 reports zero.
+    # Two questions, two fields — the single summed pair answered neither. `findings` /
+    # `resolved` are the last recorded pass's: what acceptance was judged on, so an area
+    # `accepted` after a clean second pass reads 0/0, not "2 findings, 0 resolved". The
+    # totals sum every pass, which is the area's history: a finding a later reviewer named
+    # again counts once per pass that named it (findings are counts, not records).
     recorded = [x["result"] for x in state["passes"] if x.get("result")]
-    cur["findings"] = sum(x["findings"] for x in recorded) if recorded else None
-    cur["resolved"] = sum(x["resolved"] for x in recorded) if recorded else None
+    cur["findings"] = r["findings"] if r else None
+    cur["resolved"] = r["resolved"] if r else None
+    cur["total_findings"] = sum(x["findings"] for x in recorded) if recorded else None
+    cur["total_resolved"] = sum(x["resolved"] for x in recorded) if recorded else None
     # The last recorded pass's verdicts and metrics would otherwise die with state.json: in
     # report-only mode `blockers()` is never consulted, so the ledger is the only place they
     # can be reported. Read off the shared list, so a field cannot be left behind again.
@@ -2406,6 +2411,11 @@ def cmd_project_status(a):
         if x.get("findings") is not None:
             resolved = x.get("resolved")
             line += f"  findings {metric(resolved, '?')}/{x['findings']}"
+            # The history, only where it says something the last pass does not.
+            if (x.get("total_findings") is not None
+                    and (x["total_findings"], x.get("total_resolved")) != (x["findings"], resolved)):
+                line += (f" (over all passes "
+                         f"{metric(x.get('total_resolved'), '?')}/{x['total_findings']})")
         if x.get("score") is not None:
             line += f"  score {x['score']}"
         if x.get("test_score") is not None:
