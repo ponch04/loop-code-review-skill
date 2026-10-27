@@ -1376,6 +1376,43 @@ def a_metric_the_reviewer_withheld_never_prints_as_none():
 
 
 @case
+def a_report_only_loop_never_offers_the_fix_mode_steps():
+    """`project next` wrote `report_only` into the loop state and nothing read it.
+
+    So inside a report-only area `status` judged by the acceptance gate — open findings and
+    an `inadequate` verdict, which are the report there, listed as blockers, and a clean area
+    announced "ready to accept" — while `accept` and `resolve`, steps the area never takes,
+    ran. Each must point at `project close` instead, and that must work.
+    """
+    d = repo({"pkg/a.py": "x\n"})
+    run("project", "init", "--report-only", "--", "pkg", cwd=d, check=True)
+    run("project", "next", cwd=d, check=True)
+    run("validate", "--", "true", cwd=d)
+    run("pass-start", cwd=d, check=True)
+    run("pass-record", "--score", "6", "--findings", "2", "--understood",
+        "--test-evidence", "inadequate", cwd=d, check=True)
+    out = run("status", cwd=d, check=True).stdout
+    ok("ready for `project close`" in out and "unresolved" not in out and "inadequate" not in
+       out.split("blockers:")[1], f"status must judge the area as report-only: {out.strip()[-240:]}")
+    for cmd in (("accept",), ("resolve", "--fixed", "1")):
+        r = run(*cmd, cwd=d)
+        ok(r.returncode != 0 and "--report-only area" in r.stderr and "project close" in r.stderr,
+           f"`{cmd[0]}` must refuse toward project close: rc={r.returncode} {r.stderr.strip()[:200]}")
+    findings(d, "pkg", "A. two findings\nC. inadequate\n")
+    run("project", "close", cwd=d, check=True)
+    row = read_state(d, "project.json")["areas"][0]
+    ok(row["status"] == "reviewed" and row["findings"] == 2,
+       f"and project close records the report: {row}")
+
+    d = repo()                                                   # fix-mode loops are untouched
+    write(d, "a.py", "v2\n")
+    run("init", "--", "a.py", cwd=d, check=True)
+    pass_through(d)
+    ok("ready to accept" in run("status", cwd=d, check=True).stdout,
+       "a task loop still reads `ready to accept`")
+
+
+@case
 def report_only_close_reads_the_same_conditions_as_the_acceptance_gate():
     """Two hand-written lists of "what makes a review not a review" drift, always one-sided.
 

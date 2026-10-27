@@ -35,7 +35,7 @@ task mode, and validation after each batch must cover the whole project, not jus
 In `--report-only` an area ends after step 3: record the pass, write the findings file,
 `project close`. Fix nothing and do not run steps 5–6 — the fingerprint never moves, so a second
 `pass-start` is refused; `accept` is simply not the gate here, since the ledger records
-`reviewed` either way and running it only invites a contradictory report. `amend` stays
+`reviewed` either way and running it only invites a contradictory report — the script refuses `accept` and `resolve` there, and `status` names `project close` as the next step. `amend` stays
 available: it completes the reviewer's own output, it does not resolve anything. If the area's
 checks were already red, the pass still opens — inherited red is a property of the area you
 inherited, not evidence about a change — and the findings file must say so. When an area has no executable check at all,
