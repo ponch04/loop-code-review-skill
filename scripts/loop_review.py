@@ -1720,6 +1720,26 @@ def own_artifacts():
     return (STATE_FILE, STATE_FILE + ".tmp", PROJECT_FILE, PROJECT_FILE + ".tmp", FINDINGS_DIR)
 
 
+def remove_artifact(path):
+    """Remove one of this script's files; True if something was removed.
+
+    `os.path.exists` follows links and calls a directory present, so `reset` crashed with a
+    traceback on the two shapes it can actually meet: a dangling symlink (exists() False, the
+    link stays) and a directory at the name (os.remove raises IsADirectoryError). A link is
+    unlinked, never followed; a directory is not this script's to delete and is reported.
+    """
+    if not os.path.lexists(path):
+        return False
+    if os.path.isdir(path) and not os.path.islink(path):
+        return False                                     # named in the closing note
+    try:
+        os.remove(path)
+    except OSError as e:
+        print(f"note: could not remove {path} ({e.strerror})", file=sys.stderr)
+        return False
+    return True
+
+
 def cmd_reset(a):
     os.chdir(repo_root())
     # An area frees its loop with `project close`, never with `reset`. Resetting inside one
@@ -1744,8 +1764,7 @@ def cmd_reset(a):
                     "and frees the loop, or `project close --force` settles it `incomplete`. "
                     "`reset` here would discard the outcome instead.")
     if a.project:
-        if os.path.exists(PROJECT_FILE):
-            os.remove(PROJECT_FILE)
+        if remove_artifact(PROJECT_FILE):
             print("project ledger cleared")
         else:
             print("no project ledger to clear")
@@ -1753,8 +1772,7 @@ def cmd_reset(a):
     # itself, so both are cleared whatever `--project` says. Only `project.json` is a record
     # worth keeping, and it is removed above when the operator asked for it.
     for f in (f for f in own_artifacts() if f.endswith(".tmp") or f == STATE_FILE):
-        if os.path.exists(f):
-            os.remove(f)
+        remove_artifact(f)
     # Dropping the loop state of an in-progress area strands the queue: `project next` and
     # a plain `project close` both refuse afterwards, and only `project close --force` can
     # settle it. Say so here, while the operator is still looking, instead of after two
@@ -1775,9 +1793,23 @@ def cmd_reset(a):
     except OSError:
         # Empty-only by design: rmdir refuses a non-empty directory, and the script has no
         # business deleting anything a user put in there. Missing directory is fine too.
-        ours = {os.path.basename(f) for f in own_artifacts()}
-        if os.path.isdir(STATE_DIR) and not set(os.listdir(STATE_DIR)) <= ours:
-            print(f"note: {STATE_DIR}/ kept — it holds files this script did not create")
+        # Whatever keeps it, say so: SKILL.md has the agent name `.loop-review/` in the
+        # report, and a silent survivor — the findings reports kept on purpose read as "ours",
+        # so nothing was printed — is one it does not know to mention.
+        if os.path.isdir(STATE_DIR):
+            left = sorted(os.listdir(STATE_DIR))
+            ours = {os.path.basename(f) for f in own_artifacts()}
+            why = []
+            if os.path.basename(FINDINGS_DIR) in left:
+                why.append("findings/ holds the per-area review reports, kept on purpose")
+            if os.path.basename(PROJECT_FILE) in left:
+                why.append("project.json is the ledger (`reset --project` discards it)")
+            if any(x not in ours for x in left):
+                why.append("it holds files this script did not create")
+            if os.path.isdir(STATE_FILE):
+                why.append(f"{STATE_FILE} is a directory, not a loop state — remove it by hand")
+            print(f"note: {STATE_DIR}/ kept — " + "; ".join(why or ["it is not empty"])
+                  + ". Mention it in the report; delete it once nothing in it is needed")
     print("state cleared")
 
 
