@@ -3377,21 +3377,34 @@ def doc_command_lines():
         out += [(rel, raw, body) for raw, body in prose_hits(read_text(os.path.join(ROOT, rel)))]
     # The evals are the agent's behavioural spec and name the CLI as densely as the prose;
     # an expected output that names a flag the CLI lacks grades the agent against fiction.
-    for e in json.loads(read_text(os.path.join(ROOT, "evals", "evals.json")))["evals"]:
-        for field in ("prompt", "expected_output"):
-            for body in command_hits(e.get(field, "")):
-                out.append((f"evals/evals.json#{e.get('id')}.{field}", e[field][:80], body))
+    out += evals_hits(json.loads(read_text(os.path.join(ROOT, "evals", "evals.json")))["evals"])
     return out
 
 
-def assert_invocations_parse(lines):
-    """Hand every named invocation to the real parser; collect what it will not accept."""
+def evals_hits(evals):
+    """Invocations in the evals' prompts and expected outputs, read as any document is.
+
+    Through prose_hits: line by line, a wrapped span joined. Handed to command_hits whole,
+    a span's whitespace class ran across a line break and swallowed the next line into it.
+    """
+    return [(f"evals/evals.json#{e.get('id')}.{field}", raw, body)
+            for e in evals for field in ("prompt", "expected_output")
+            for raw, body in prose_hits(e.get(field, ""))]
+
+
+def assert_invocations_parse(lines, failures=None):
+    """Hand every named invocation to the real parser; collect what it will not accept.
+
+    Failures go to `failures` (the suite's list by default), so a case can run it on planted
+    lines without editing the global list it is itself being judged by.
+    """
+    failures = FAILURES if failures is None else failures
     parser = module().build_parser()
     for rel, raw, body in lines:
         try:
             tokens = shlex.split(body)
         except ValueError:
-            FAILURES.append(f"{rel}: unparseable command line: {raw}")
+            failures.append(f"{rel}: unparseable command line: {raw}")
             continue
         if not tokens:
             continue
@@ -3405,15 +3418,17 @@ def assert_invocations_parse(lines):
         # that the name exists instead.
         if len(tokens) == 1 or (len(tokens) == 2 and tokens[0] == "project"):
             if " ".join(tokens) not in SUBCOMMANDS:
-                FAILURES.append(f"{rel}: `{raw}` names no such subcommand")
+                failures.append(f"{rel}: `{raw}` names no such subcommand")
             continue
         tokens = [PLACEHOLDERS.get(tokens[i - 1], t) if t == "..." and i else t
                   for i, t in enumerate(tokens)]
         fill = [PLACEHOLDERS[tokens[-1]]] if tokens[-1] in PLACEHOLDERS else ["ARG"]
         # An all-caps word after a flag is a placeholder, as the help writes them
         # (`--findings N`, `--score S`); a typed flag rejects the word, so try it as a number.
-        numbered = [("1" if re.fullmatch(r"[A-Z]+", t) and i and tokens[i - 1].startswith("--")
-                     else t) for i, t in enumerate(tokens)]
+        # Every placeholder — `ARG` from `<...>` or an interpolation, or an all-caps word as
+        # the help writes them (`--findings N`) — tried as a number wherever it stands: the
+        # CLI has no upper-case choice or subcommand that this could mistake for one.
+        numbered = ["1" if re.fullmatch(r"[A-Z][A-Z_]*", t) else t for t in tokens]
         for attempt in (tokens, tokens + fill, tokens + ["1"], numbered, numbered + fill):
             buf = _io.StringIO()
             try:
@@ -3423,15 +3438,28 @@ def assert_invocations_parse(lines):
             except (SystemExit, argparse.ArgumentError):
                 last = buf.getvalue().strip().splitlines()[-1:] or [""]
         else:
-            FAILURES.append(f"{rel}: `{raw}` is not accepted by the CLI ({last})")
+            failures.append(f"{rel}: `{raw}` is not accepted by the CLI ({last})")
 
 
 @case
-def every_command_in_the_prose_exists_in_the_cli():
-    """The prose is executed by a model; a flag it names that the CLI lacks is a dead end,
-    and exercising the script cannot catch it."""
-    lines = doc_command_lines()
-    ok(len(lines) >= 12, f"expected the prose to show the command surface, found {len(lines)}")
+def every_invocation_from_every_source_exists_in_the_cli():
+    """Prose, evals and the script's own messages, through one list and one parser.
+
+    The prose is executed by a model, and a flag it names that the CLI lacks is a dead end
+    exercising the script cannot catch. A refusal is the same: `project close` sent the
+    operator to `reset --force`, which `reset` has never accepted, while the plain `reset`
+    it also implied was refused mid-area — the dead end was quoted in a die() string, not in
+    a document. Two cases read two sources each; a source added to `invocations()` is
+    checked here without anyone remembering to.
+    """
+    lines = invocations()
+    seen = {}
+    for src, _, _ in lines:
+        kind = src.split(":")[0].split("#")[0]
+        kind = "script" if kind == "scripts/loop_review.py" else "evals" if kind.startswith("evals") else "prose"
+        seen[kind] = seen.get(kind, 0) + 1
+    ok(seen.get("prose", 0) >= 12 and seen.get("script", 0) >= 10 and seen.get("evals", 0) >= 5,
+       f"every source must contribute to the command surface: {seen}")
     assert_invocations_parse(lines)
 
 
@@ -3792,29 +3820,19 @@ def the_invocation_collector_sees_every_form_a_recommendation_takes():
        "a longer flag does not name a shorter one")
     ok(any(src.startswith("evals/evals.json#") for src, _, _ in invocations()),
        "the evals are among the sources")
-    lines = [("planted", "x", "pass-record --findings N"), ("planted", "x", "reset --frce")]
-    before = len(FAILURES)
-    assert_invocations_parse(lines)
-    found = FAILURES[before:]
-    del FAILURES[before:]
-    ok(len(found) == 1 and "--frce" in found[0],
-       f"an all-caps placeholder parses, a dead flag does not: {found}")
+    found = []
+    assert_invocations_parse([("planted", "x", "pass-record --findings N"),
+                              ("planted", "y", "resolve --fixed ARG"),
+                              ("planted", "z", "reset --frce")], found)
+    ok(len(found) == 1 and "`z`" in found[0],
+       f"placeholders parse wherever they stand, a dead flag does not: {found}")
+    found = [b for _, _, b in evals_hits([{"id": 0, "prompt": "Run `project close\n  --frce` "
+                                           "and then `init`\nlater text `x`"}])]
+    ok("project close --frce" in found and not any("later" in b for b in found),
+       f"an eval field is read line by line, a wrapped span joined: {found}")
 
 
 @case
-def every_command_the_script_recommends_exists_in_the_cli():
-    """A refusal that names the way out is only useful if that way exists.
-
-    `project close` sent the operator to `reset --force`, which `reset` has never accepted,
-    while the plain `reset` it also implied was refused mid-area — the two commands together
-    left no route out of the state at all. Checking the prose could not see it: the dead end
-    was quoted in a die() string, not in a document.
-    """
-    lines = script_message_lines()
-    ok(len(lines) >= 10, f"expected the messages to name the CLI, found {len(lines)}")
-    assert_invocations_parse(lines)
-
-
 @case
 def the_second_passport_name_stays_a_link_never_a_copy():
     """One passport, two runtime names — and the difference is load-bearing.
