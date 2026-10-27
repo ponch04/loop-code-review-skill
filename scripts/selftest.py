@@ -953,6 +953,56 @@ def state_dir_inside_scope_does_not_deadlock():
 # ---------------------------------------------------------------------------- fingerprint
 
 @case
+def a_link_in_scope_is_the_link_not_its_target():
+    """A tracked symlink — this repository's own `CLAUDE.md -> AGENTS.md` — is an entry of
+    its own, both when it is named and when it is hashed.
+
+    A path given through a symlinked directory fell back to `realpath`, which also followed
+    the last component: `init -- /via/link/CLAUDE.md` scoped `AGENTS.md`, the dedupe merged
+    the two, and the link was out of scope; a link pointing outside the repository was
+    refused as "outside". And the hash read through links, so an area holding a link moved
+    when the *target* — outside the area — was edited, while swapping the link for a copy of
+    the same bytes moved nothing.
+    """
+    d = repo({"AGENTS.md": "passport\n", "area/x.py": "x\n"})
+    sh("ln -s AGENTS.md CLAUDE.md && ln -s ../AGENTS.md area/LINK.md && ln -s /etc/hostname OUT.md"
+       " && git add -A && git commit -qm links", d)
+    write(d, "AGENTS.md", "passport v2\n")
+    via = tempfile.mkdtemp(prefix="loop-selftest-via-")
+    REPOS.append(via)
+    hop = os.path.join(via, "repo")
+    os.symlink(d, hop)
+    r = run("init", "--", os.path.join(hop, "CLAUDE.md"), os.path.join(hop, "AGENTS.md"),
+            os.path.join(hop, "OUT.md"), cwd=d)
+    ok(r.returncode == 0 and read_state(d)["scope"] == ["CLAUDE.md", "AGENTS.md", "OUT.md"],
+       f"a path through a symlinked directory names the link, not its target: rc={r.returncode} "
+       f"{read_state(d).get('scope') if r.returncode == 0 else r.stderr.strip()[:160]}")
+
+    m = module()
+    cwd = os.getcwd()
+    os.chdir(d)
+    try:
+        before = m.fingerprint(["area"], "project")
+        write_text("AGENTS.md", "passport v3\n")                 # the target, outside the area
+        ok(m.fingerprint(["area"], "project") == before,
+           "editing a link's target outside the area must not move the area's hash")
+        before = m.fingerprint(["area"], "project")
+        os.remove("area/LINK.md")
+        write_text("area/LINK.md", "passport v3\n")               # a copy of the same bytes
+        ok(m.fingerprint(["area"], "project") != before,
+           "replacing the link with a copy must move it")
+        os.remove("area/LINK.md")
+        os.symlink("../AGENTS.md", "area/LINK.md")
+        os.symlink("../AGENTS.md", "area/NEW.md")                  # untracked, changes mode
+        before = m.fingerprint(["area"], "changes")
+        write_text("AGENTS.md", "passport v4\n")
+        ok(m.fingerprint(["area"], "changes") == before,
+           "an untracked link hashes as itself in changes mode too")
+    finally:
+        os.chdir(cwd)
+
+
+@case
 def a_mode_or_link_change_moves_the_fingerprint():
     """The fingerprint hashed bytes only, and a file's state is more than its bytes.
 
